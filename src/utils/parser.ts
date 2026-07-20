@@ -1371,14 +1371,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       rules: routingRules,
       auto_detect_interface: true,
       final: 'proxy',
-      default_domain_resolver: 'dns_proxy',
+      default_domain_resolver: 'dns_direct',
     };
   } else {
     finalConfig.route.auto_detect_interface = finalConfig.route.auto_detect_interface !== undefined 
       ? finalConfig.route.auto_detect_interface 
       : true;
     finalConfig.route.final = finalConfig.route.final || 'proxy';
-    finalConfig.route.default_domain_resolver = finalConfig.route.default_domain_resolver || 'dns_proxy';
+    finalConfig.route.default_domain_resolver = finalConfig.route.default_domain_resolver || 'dns_direct';
     finalConfig.route.rules = [
       ...(finalConfig.route.rules || []),
       ...routingRules
