@@ -59,6 +59,8 @@ npm run build
 
 ## Deploy to Cloudflare Pages
 
+> ⚠️ **关键设置**：Build output directory 必须设为 **`dist`**，否则 Cloudflare 会部署源码而非构建产物，导致白屏。
+
 ### Option 1: Wrangler CLI
 
 ```bash
@@ -70,11 +72,19 @@ npm run deploy
 ### Option 2: Git Integration
 
 1. 在 [Cloudflare Dashboard](https://dash.cloudflare.com) → Workers & Pages → Create → Application → Pages → Connect to Git
-2. 选择 `eyeoko/NodeFlowConverter` 仓库
-3. 构建设置：
-   - Build command: `npm run build`
-   - Build output directory: `dist`
+2. 选择 `eyeoko/NodeFlowConverter` 仓库（`cf` 分支）
+3. 构建设置（必须确保正确）：
+   - **Build command**: `npm run build`
+   - **Build output directory**: **`dist`**（❗ 此项不能为空，不能为 `.`）
 4. 部署后 Cloudflare 会自动识别 `functions/` 目录下的 Pages Functions 并为其处理 API 路由
+
+### Troubleshooting
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| 白屏，HTML 中 script src 为 `/src/main.tsx` | Build output directory 未设置为 `dist` | 在 Dashboard 中将输出目录改为 `dist` 并重新部署 |
+| 白屏，HTML 中包含 `fonts.googleapis.com` 链接 | Google Fonts 被网络拦截导致加载阻塞 | 使用 `cf` 分支最新代码（已移除 Google Fonts 依赖） |
+| API 返回 404 | `functions/` 目录未正确部署 | 确认项目根目录包含 `functions/` 文件夹 |
 
 ## Project Structure
 
