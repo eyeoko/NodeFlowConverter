@@ -905,10 +905,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       {
         rule_set: 'geosite-cn',
         outbound: 'direct',
-      },
-      {
-        rule_set: 'geoip-cn',
-        outbound: 'direct',
       }
     );
     routeRuleSets.push(
@@ -917,13 +913,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-cn',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-cn'),
-        download_detour: 'direct',
-      },
-      {
-        type: 'remote',
-        tag: 'geoip-cn',
-        format: 'binary',
-        url: getRulesetUrl('geoip', 'geoip-cn'),
         download_detour: 'direct',
       }
     );
