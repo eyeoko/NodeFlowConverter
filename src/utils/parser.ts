@@ -746,13 +746,13 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     dnsServers.push(
       {
         type: 'udp',
-        tag: 'dns_proxy',
-        server: '8.8.8.8',
+        tag: 'dns_direct',
+        server: '119.29.29.29',
       },
       {
         type: 'udp',
-        tag: 'dns_direct',
-        server: '119.29.29.29',
+        tag: 'dns_proxy',
+        server: '8.8.8.8',
       }
     );
     dnsRules.push(
