@@ -719,16 +719,16 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   if (options.dnsStrategy === 'fakeip') {
     dnsServers.push(
       {
-        type: 'udp',
-        tag: 'dns_direct',
-        server: '223.5.5.5',
-      },
-      {
         type: 'https',
         tag: 'dns_proxy',
         server: '8.8.8.8',
         path: '/dns-query',
         detour: 'proxy',
+      },
+      {
+        type: 'udp',
+        tag: 'dns_direct',
+        server: '223.5.5.5',
       },
       {
         type: 'fakeip',
@@ -737,10 +737,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       }
     );
     dnsRules.push(
-      {
-        outbound: 'any',
-        server: 'dns_direct',
-      },
       {
         query_type: ['A', 'AAAA'],
         server: 'dns_fakeip',
@@ -751,14 +747,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     dnsServers.push(
       {
         type: 'udp',
-        tag: 'dns_direct',
-        server: '119.29.29.29',
-      },
-      {
-        type: 'udp',
         tag: 'dns_proxy',
         server: '8.8.8.8',
         detour: 'proxy',
+      },
+      {
+        type: 'udp',
+        tag: 'dns_direct',
+        server: '119.29.29.29',
       }
     );
     dnsRules.push(
@@ -778,11 +774,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         server: 'dns_direct',
       });
     }
-
-    dnsRules.push({
-      outbound: 'any',
-      server: 'dns_proxy',
-    });
   }
 
   // Build basic routing rules based on options
@@ -820,7 +811,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-ads-all',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-ads-all'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -836,14 +827,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-openai',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-openai'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-anthropic',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-anthropic'),
-        download_detour: 'direct',
+        detour: 'direct',
       }
     );
   }
@@ -859,7 +850,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-bilibili',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-bilibili'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -874,7 +865,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-youtube',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-youtube'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -889,7 +880,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-google',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-google'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -923,14 +914,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-cn',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-cn'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geoip-cn',
         format: 'binary',
         url: getRulesetUrl('geoip', 'geoip-cn'),
-        download_detour: 'direct',
+        detour: 'direct',
       }
     );
   }
@@ -953,14 +944,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-telegram',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-telegram'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geoip-telegram',
         format: 'binary',
         url: getRulesetUrl('geoip', 'geoip-telegram'),
-        download_detour: 'direct',
+        detour: 'direct',
       }
     );
   }
@@ -976,7 +967,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-github',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-github'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -991,7 +982,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-microsoft',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-microsoft'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1006,7 +997,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-apple',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-apple'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1023,21 +1014,21 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-twitter',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-twitter'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-facebook',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-facebook'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-instagram',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-instagram'),
-        download_detour: 'direct',
+        detour: 'direct',
       }
     );
   }
@@ -1056,28 +1047,28 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-netflix',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-netflix'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geoip-netflix',
         format: 'binary',
         url: getRulesetUrl('geoip', 'geoip-netflix'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-disney',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-disney'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-hbo',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-hbo'),
-        download_detour: 'direct',
+        detour: 'direct',
       }
     );
   }
@@ -1096,28 +1087,28 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-steam',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-steam'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-epic',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-epic'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-ea',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-ea'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-nintendo',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-nintendo'),
-        download_detour: 'direct',
+        detour: 'direct',
       }
     );
   }
@@ -1133,7 +1124,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-scholar-education',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-scholar-education'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1148,7 +1139,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-finance',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-finance'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1164,14 +1155,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-cloudflare',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-cloudflare'),
-        download_detour: 'direct',
+        detour: 'direct',
       },
       {
         type: 'remote',
         tag: 'geosite-aws',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-aws'),
-        download_detour: 'direct',
+        detour: 'direct',
       }
     );
   }
@@ -1187,7 +1178,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-spotify',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-spotify'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1202,7 +1193,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-tiktok',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-tiktok'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1225,7 +1216,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-proxy',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-proxy'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1240,7 +1231,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-media',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-media'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1263,7 +1254,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-geolocation-!cn',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-geolocation-!cn'),
-      download_detour: 'direct',
+      detour: 'direct',
     });
   }
 
@@ -1282,7 +1273,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
           tag,
           format: 'binary',
           url: rule.value,
-          download_detour: 'direct',
+          detour: 'direct',
         });
       }
     }
@@ -1377,12 +1368,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       rules: routingRules,
       auto_detect_interface: true,
       final: 'proxy',
+      default_domain_resolver: 'dns_proxy',
     };
   } else {
     finalConfig.route.auto_detect_interface = finalConfig.route.auto_detect_interface !== undefined 
       ? finalConfig.route.auto_detect_interface 
       : true;
     finalConfig.route.final = finalConfig.route.final || 'proxy';
+    finalConfig.route.default_domain_resolver = finalConfig.route.default_domain_resolver || 'dns_proxy';
     finalConfig.route.rules = [
       ...(finalConfig.route.rules || []),
       ...routingRules
