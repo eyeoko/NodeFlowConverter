@@ -752,14 +752,31 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       {
         type: 'udp',
         tag: 'dns_direct',
-        server: '119.29.29.29',
+        server: '223.5.5.5',
       },
       {
         type: 'udp',
         tag: 'dns_proxy',
         server: '8.8.8.8',
+        detour: 'proxy',
       }
     );
+
+    // Bootstrap: proxy server domains must resolve via direct DNS (prevents loopback)
+    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s)))];
+    if (nodeServers.length > 0) {
+      dnsRules.push({
+        domain: nodeServers,
+        server: 'dns_direct',
+      });
+    }
+    // Chinese domains → domestic DNS
+    if (options.rulesets.includes('China-Services') || options.rulesets.includes('GeoIP:CN')) {
+      dnsRules.push({
+        rule_set: 'geosite-cn',
+        server: 'dns_direct',
+      });
+    }
     dnsRules.push(
       {
         clash_mode: 'Direct',
@@ -770,13 +787,11 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         server: 'dns_proxy',
       }
     );
-
-    if (options.rulesets.includes('China-Services') || options.rulesets.includes('GeoIP:CN')) {
-      dnsRules.unshift({
-        rule_set: 'geosite-cn',
-        server: 'dns_direct',
-      });
-    }
+    // Everything else (non-Chinese, non-proxy-server) → proxy DNS for correct IPs
+    dnsRules.push({
+      query_type: ['A', 'AAAA'],
+      server: 'dns_proxy',
+    });
   }
 
   // Build basic routing rules based on options
@@ -790,7 +805,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       action: 'hijack-dns',
     },
     {
-      ip_cidr: ['119.29.29.29/32', '223.5.5.5/32'],
+      ip_cidr: ['119.29.29.29/32', '223.5.5.5/32', '8.8.8.8/32'],
       outbound: 'direct',
     },
     {
