@@ -369,6 +369,8 @@ export default function App() {
   const [subUrl, setSubUrl] = useState('');
   const [parsedNodes, setParsedNodes] = useState<ProxyNode[]>([]);
   const [singBoxConfig, setSingBoxConfig] = useState('');
+  const [editableConfig, setEditableConfig] = useState('');
+  const [validationMsg, setValidationMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'preview' | 'nodes'>('preview');
 
@@ -470,6 +472,8 @@ export default function App() {
       customRules,
     });
     setSingBoxConfig(generated);
+    setEditableConfig(generated);
+    setValidationMsg(null);
   }, [rawInput, template, dnsStrategy, rulesets, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customBaseTemplate, isValidJson, customRules]);
 
   // Handle auto-closing notifications
@@ -479,10 +483,26 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [notification]);
 
+  // Validate JSON
+  const handleValidateConfig = () => {
+    const trimmed = editableConfig.trim();
+    if (!trimmed) {
+      setValidationMsg({ ok: false, text: lang === 'zh' ? '配置为空' : 'Empty config' });
+      return;
+    }
+    try {
+      JSON.parse(trimmed);
+      setValidationMsg({ ok: true, text: lang === 'zh' ? 'JSON 格式有效 ✓' : 'Valid JSON ✓' });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Parse error';
+      setValidationMsg({ ok: false, text: msg });
+    }
+  };
+
   // Copy output to clipboard
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(singBoxConfig);
+      await navigator.clipboard.writeText(editableConfig);
       setCopyFeedback(true);
       setNotification({ type: 'success', message: t.toastCopiedSuccess });
       setTimeout(() => setCopyFeedback(false), 2000);
@@ -1597,6 +1617,14 @@ export default function App() {
                   </button>
 
                   <button
+                    onClick={handleValidateConfig}
+                    className="p-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer text-xs font-bold border border-amber-200"
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    {lang === 'zh' ? '验证' : 'Validate'}
+                  </button>
+
+                  <button
                     onClick={handleDownload}
                     className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer text-xs font-bold shadow-sm shadow-indigo-100"
                   >
@@ -1629,9 +1657,26 @@ export default function App() {
           {/* Tab Content 1: Code Output Block */}
           {activeTab === 'preview' && (
             <div className="relative">
-              <pre className="bg-slate-900 text-slate-200 p-5 rounded-xl font-mono text-xs overflow-x-auto min-h-[460px] max-h-[520px] leading-relaxed border border-slate-800">
-                <code>{singBoxConfig || t.noNodesMatchedPreview}</code>
-              </pre>
+              <textarea
+                value={editableConfig}
+                onChange={(e) => {
+                  setEditableConfig(e.target.value);
+                  setValidationMsg(null);
+                }}
+                placeholder={t.noNodesMatchedPreview}
+                className="w-full min-h-[460px] max-h-[520px] bg-slate-900 text-slate-200 p-5 rounded-xl font-mono text-xs leading-relaxed border border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y"
+                spellCheck={false}
+              />
+              {validationMsg && (
+                <div className={`absolute bottom-3 right-3 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold shadow-sm ${
+                  validationMsg.ok
+                    ? 'bg-emerald-600/90 text-white'
+                    : 'bg-rose-600/90 text-white'
+                }`}>
+                  {validationMsg.ok ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                  <span className="max-w-[300px] truncate">{validationMsg.text}</span>
+                </div>
+              )}
             </div>
           )}
 
