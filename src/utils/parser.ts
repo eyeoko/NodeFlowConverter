@@ -730,11 +730,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         type: 'udp',
         tag: 'dns_direct',
         server: '223.5.5.5',
-      },
-      {
-        type: 'fakeip',
-        tag: 'dns_fakeip',
-        inet4_range: '198.18.0.0/15',
       }
     );
     // Node server domains must resolve via real DNS (not fakeip) so proxies can connect
@@ -748,7 +743,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     dnsRules.push(
       {
         query_type: ['A', 'AAAA'],
-        server: 'dns_fakeip',
+        action: 'fakeip',
       }
     );
   } else {
