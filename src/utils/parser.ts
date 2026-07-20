@@ -559,6 +559,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       type: 'selector',
       tag: 'proxy',
       outbounds: mainProxyOutbounds,
+      default: nodeNames.length > 0 ? nodeNames[0] : undefined,
     });
 
     if (includeAutoGroup) {
@@ -585,6 +586,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       type: 'selector',
       tag: 'proxy',
       outbounds: mainProxyOutbounds,
+      default: nodeNames.length > 0 ? nodeNames[0] : undefined,
     });
 
     if (includeAutoGroup && nodeNames.length > 0) {
@@ -735,6 +737,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         inet4_range: '198.18.0.0/15',
       }
     );
+    // Node server domains must resolve via real DNS (not fakeip) so proxies can connect
+    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s)))];
+    if (nodeServers.length > 0) {
+      dnsRules.push({
+        domain: nodeServers,
+        server: 'dns_direct',
+      });
+    }
     dnsRules.push(
       {
         query_type: ['A', 'AAAA'],
