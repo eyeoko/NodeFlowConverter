@@ -723,7 +723,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'dns_proxy',
         server: '8.8.8.8',
         path: '/dns-query',
-        detour: 'proxy',
       },
       {
         type: 'udp',
@@ -749,7 +748,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         type: 'udp',
         tag: 'dns_proxy',
         server: '8.8.8.8',
-        detour: 'proxy',
       },
       {
         type: 'udp',
