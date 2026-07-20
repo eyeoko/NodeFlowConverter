@@ -763,10 +763,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     );
     dnsRules.push(
       {
-        outbound: 'any',
-        server: 'dns_direct',
-      },
-      {
         clash_mode: 'Direct',
         server: 'dns_direct',
       },
@@ -777,11 +773,16 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     );
 
     if (options.rulesets.includes('GeoIP:CN')) {
-      dnsRules.push({
+      dnsRules.unshift({
         rule_set: 'geosite-cn',
         server: 'dns_direct',
       });
     }
+
+    dnsRules.push({
+      outbound: 'any',
+      server: 'dns_proxy',
+    });
   }
 
   // Build basic routing rules based on options
@@ -1375,11 +1376,13 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     finalConfig.route = {
       rules: routingRules,
       auto_detect_interface: true,
+      final: 'proxy',
     };
   } else {
     finalConfig.route.auto_detect_interface = finalConfig.route.auto_detect_interface !== undefined 
       ? finalConfig.route.auto_detect_interface 
       : true;
+    finalConfig.route.final = finalConfig.route.final || 'proxy';
     finalConfig.route.rules = [
       ...(finalConfig.route.rules || []),
       ...routingRules
