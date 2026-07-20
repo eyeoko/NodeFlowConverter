@@ -2,15 +2,5 @@
   "log": {
     "level": "info",
     "timestamp": true
-  },
-  "dns": {
-    "servers": [
-      { "type": "udp", "tag": "dns_direct", "server": "223.5.5.5" },
-      { "type": "udp", "tag": "dns_proxy", "server": "8.8.8.8", "detour": "proxy" }
-    ],
-    "rules": [
-      { "outbound": "any", "server": "dns_direct" }
-    ],
-    "strategy": "ipv4_only"
   }
 }
