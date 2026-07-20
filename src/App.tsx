@@ -557,7 +557,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `singbox_config_${template}.json`;
+      a.download = `singbox-latest.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
