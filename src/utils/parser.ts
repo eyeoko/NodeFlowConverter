@@ -1403,14 +1403,18 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
 
   // Add service API (Sing-Box 1.14+) and Clash API for compatibility
   if (options.enableClashApi) {
-    const apiPort = options.clashApiPort || '127.0.0.1:9090';
+    const rawAddr = options.clashApiPort || '127.0.0.1:9090';
+    const colonIdx = rawAddr.lastIndexOf(':');
+    const listenIp = colonIdx > 0 ? rawAddr.slice(0, colonIdx) : '127.0.0.1';
+    const listenPort = colonIdx > 0 ? parseInt(rawAddr.slice(colonIdx + 1), 10) : parseInt(rawAddr, 10);
     // New sing-box API service (gRPC + dashboard) — required by SFM 1.14+ GUI
     finalConfig.services = finalConfig.services || [];
     const hasApiService = finalConfig.services.some((s: any) => s.type === 'api');
     if (!hasApiService) {
       finalConfig.services.push({
         type: 'api',
-        listen: apiPort,
+        listen: listenIp,
+        listen_port: listenPort,
         access_control_allow_origin: ['*'],
         access_control_allow_private_network: true,
         dashboard: {
@@ -1423,7 +1427,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     // Legacy Clash API (REST) — for third-party UIs (yacd/metacubexd) via CLI usage
     finalConfig.experimental = finalConfig.experimental || {};
     finalConfig.experimental.clash_api = finalConfig.experimental.clash_api || {
-      external_controller: apiPort,
+      external_controller: rawAddr,
       default_mode: 'rule'
     };
   }
