@@ -198,8 +198,6 @@ function parseShadowsocks(urlStr: string): ProxyNode | null {
 
     // Modern SIP002 shadowsocks URL scheme
     // ss://base64(method:password)@host:port
-    const hostAndPort = url.host;
-    const pathPart = url.pathname;
     let decodedUserInfo = '';
 
     // Check if user info is base64
@@ -424,39 +422,195 @@ export interface ConversionOptions {
   template: 'singbox-latest' | 'singbox-v1.8' | 'clash-meta';
   dnsStrategy: 'system' | 'fakeip' | 'custom';
   rulesets: string[];
+  groupByCountry?: boolean;
+  includeAutoGroup?: boolean;
+  enableClashApi?: boolean;
+  clashApiPort?: string;
+  clashUiUrl?: string;
+  cdnPrefix?: string;
+  enableTun?: boolean;
+  enableMixed?: boolean;
+  mixedPort?: string;
+  customBaseTemplate?: string;
+  customRules?: { type: 'domain' | 'ip' | 'rule_set'; value: string; outbound: 'proxy' | 'direct' | 'block' }[];
 }
 
 export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOptions): string {
   const nodeNames = nodes.map(n => n.name);
 
+  const getRulesetUrl = (type: 'geosite' | 'geoip', name: string): string => {
+    const prefix = (options.cdnPrefix || 'https://testingcf.jsdelivr.net').trim().replace(/\/$/, '');
+    if (prefix.includes('raw.githubusercontent.com')) {
+      return `${prefix}/SagerNet/sing-${type}/rule-set/${name}.srs`;
+    }
+    return `${prefix}/gh/SagerNet/sing-${type}@rule-set/${name}.srs`;
+  };
+
   // Generate Outbounds list
-  const outbounds: any[] = [
-    {
+  const outbounds: any[] = [];
+  const groupOutbounds: any[] = []; // country group definitions to be appended later
+  
+  const groupByCountry = !!options.groupByCountry;
+  const includeAutoGroup = options.includeAutoGroup !== false;
+
+  if (groupByCountry && nodeNames.length > 0) {
+    const countries: { key: string; emoji: string; nameZh: string; keywords: string[] }[] = [
+      { key: 'HK', emoji: '🇭🇰', nameZh: '香港', keywords: ['香港', 'HK', 'HONG KONG', '🇭🇰'] },
+      { key: 'SG', emoji: '🇸🇬', nameZh: '新加坡', keywords: ['新加坡', 'SG', 'SINGAPORE', '🇸🇬'] },
+      { key: 'JP', emoji: '🇯🇵', nameZh: '日本', keywords: ['日本', 'JP', 'JAPAN', '🇯🇵'] },
+      { key: 'US', emoji: '🇺🇸', nameZh: '美国', keywords: ['美国', 'US', 'UNITED STATES', 'USA', '🇺🇸'] },
+      { key: 'TW', emoji: '🇹🇼', nameZh: '台湾', keywords: ['台湾', 'TW', 'TAIWAN', '🇹🇼'] },
+      { key: 'KR', emoji: '🇰🇷', nameZh: '韩国', keywords: ['韩国', 'KR', 'KOREA', '🇰🇷'] },
+      { key: 'UK', emoji: '🇬🇧', nameZh: '英国', keywords: ['英国', 'UK', 'GB', 'UNITED KINGDOM', '🇬🇧'] },
+      { key: 'DE', emoji: '🇩🇪', nameZh: '德国', keywords: ['德国', 'DE', 'GERMANY', '🇩🇪'] },
+      { key: 'FR', emoji: '🇫🇷', nameZh: '法国', keywords: ['法国', 'FR', 'FRANCE', '🇫🇷'] }
+    ];
+
+    const countryGroups: { [key: string]: string[] } = {};
+    const ungroupedNodes: string[] = [];
+
+    for (const name of nodeNames) {
+      let matched = false;
+      const nameUpper = name.toUpperCase();
+      for (const c of countries) {
+        if (c.keywords.some(kw => nameUpper.includes(kw.toUpperCase()))) {
+          if (!countryGroups[c.key]) {
+            countryGroups[c.key] = [];
+          }
+          countryGroups[c.key].push(name);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        ungroupedNodes.push(name);
+      }
+    }
+
+    const activeCountryTags: string[] = [];
+
+    for (const c of countries) {
+      const groupNodes = countryGroups[c.key];
+      if (groupNodes && groupNodes.length > 0) {
+        const selectorTag = `${c.emoji} ${c.nameZh}分组`;
+        activeCountryTags.push(selectorTag);
+
+        const countryOutbounds: string[] = [];
+
+        if (includeAutoGroup) {
+          const autoTag = `⚡ ${c.emoji} ${c.nameZh}自动`;
+          countryOutbounds.push(autoTag);
+
+          groupOutbounds.push({
+            type: 'urltest',
+            tag: autoTag,
+            outbounds: groupNodes,
+            url: 'https://www.gstatic.com/generate_204',
+            interval: '3m',
+            tolerance: 50,
+          });
+        }
+
+        countryOutbounds.push(...groupNodes);
+
+        groupOutbounds.push({
+          type: 'selector',
+          tag: selectorTag,
+          outbounds: countryOutbounds,
+        });
+      }
+    }
+
+    if (ungroupedNodes.length > 0) {
+      const otherTag = '🌍 其它地区';
+      activeCountryTags.push(otherTag);
+
+      const countryOutbounds: string[] = [];
+      if (includeAutoGroup) {
+        const autoTag = '⚡ 🌍 其它自动';
+        countryOutbounds.push(autoTag);
+        groupOutbounds.push({
+          type: 'urltest',
+          tag: autoTag,
+          outbounds: ungroupedNodes,
+          url: 'https://www.gstatic.com/generate_204',
+          interval: '3m',
+          tolerance: 50,
+        });
+      }
+      countryOutbounds.push(...ungroupedNodes);
+
+      groupOutbounds.push({
+        type: 'selector',
+        tag: otherTag,
+        outbounds: countryOutbounds,
+      });
+    }
+
+    const mainProxyOutbounds: string[] = [];
+    if (includeAutoGroup) {
+      mainProxyOutbounds.push('auto');
+    }
+    mainProxyOutbounds.push('direct');
+    mainProxyOutbounds.push(...activeCountryTags);
+    mainProxyOutbounds.push(...nodeNames);
+
+    outbounds.push({
       type: 'selector',
       tag: 'proxy',
-      outbounds: ['auto', 'direct', ...nodeNames],
-    },
-    {
-      type: 'urltest',
-      tag: 'auto',
-      outbounds: [...nodeNames],
-      url: 'https://www.gstatic.com/generate_204',
-      interval: '3m',
-      tolerance: 50,
-    },
-    {
-      type: 'direct',
-      tag: 'direct',
-    },
-    {
-      type: 'block',
-      tag: 'block',
-    },
-    {
-      type: 'dns',
-      tag: 'dns-out',
-    },
-  ];
+      outbounds: mainProxyOutbounds,
+    });
+
+    if (includeAutoGroup) {
+      outbounds.push({
+        type: 'urltest',
+        tag: 'auto',
+        outbounds: nodeNames,
+        url: 'https://www.gstatic.com/generate_204',
+        interval: '3m',
+        tolerance: 50,
+      });
+    }
+
+  } else {
+    // Standard direct list
+    const mainProxyOutbounds: string[] = [];
+    if (includeAutoGroup && nodeNames.length > 0) {
+      mainProxyOutbounds.push('auto');
+    }
+    mainProxyOutbounds.push('direct');
+    mainProxyOutbounds.push(...nodeNames);
+
+    outbounds.push({
+      type: 'selector',
+      tag: 'proxy',
+      outbounds: mainProxyOutbounds,
+    });
+
+    if (includeAutoGroup && nodeNames.length > 0) {
+      outbounds.push({
+        type: 'urltest',
+        tag: 'auto',
+        outbounds: nodeNames,
+        url: 'https://www.gstatic.com/generate_204',
+        interval: '3m',
+        tolerance: 50,
+      });
+    }
+  }
+
+  // Standard direct and block outbounds
+  outbounds.push({
+    type: 'direct',
+    tag: 'direct',
+  });
+  outbounds.push({
+    type: 'block',
+    tag: 'block',
+  });
+
+  // Append any country groups / test groups
+  outbounds.push(...groupOutbounds);
 
   // Convert each node to outbound format
   for (const node of nodes) {
@@ -474,7 +628,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       ob.type = 'vmess';
       ob.uuid = node.uuid || '';
       ob.security = 'auto';
-      ob.alter_id = 0;
       if (node.network && node.network !== 'tcp') {
         ob.transport = {
           type: node.network,
@@ -561,22 +714,26 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   // Set up DNS based on strategy
   const dnsServers: any[] = [];
   const dnsRules: any[] = [];
+  const routeRuleSets: any[] = [];
 
   if (options.dnsStrategy === 'fakeip') {
     dnsServers.push(
       {
+        type: 'udp',
         tag: 'dns_direct',
-        address: '223.5.5.5',
-        detour: 'direct',
+        server: '223.5.5.5',
       },
       {
+        type: 'https',
         tag: 'dns_proxy',
-        address: 'https://8.8.8.8/dns-query',
+        server: '8.8.8.8',
+        path: '/dns-query',
         detour: 'proxy',
       },
       {
+        type: 'fakeip',
         tag: 'dns_fakeip',
-        address: 'fakeip',
+        inet4_range: '198.18.0.0/15',
       }
     );
     dnsRules.push(
@@ -593,13 +750,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     // default/system strategy
     dnsServers.push(
       {
+        type: 'udp',
         tag: 'dns_direct',
-        address: '119.29.29.29',
-        detour: 'direct',
+        server: '119.29.29.29',
       },
       {
+        type: 'udp',
         tag: 'dns_proxy',
-        address: '8.8.8.8',
+        server: '8.8.8.8',
         detour: 'proxy',
       }
     );
@@ -620,7 +778,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
 
     if (options.rulesets.includes('GeoIP:CN')) {
       dnsRules.push({
-        domain_suffix: ['.cn'],
+        rule_set: 'geosite-cn',
         server: 'dns_direct',
       });
     }
@@ -629,8 +787,16 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   // Build basic routing rules based on options
   const routingRules: any[] = [
     {
+      action: 'sniff',
+      sniffer: ['http', 'tls', 'quic'],
+    },
+    {
       protocol: 'dns',
-      outbound: 'dns-out',
+      action: 'hijack-dns',
+    },
+    {
+      ip_cidr: ['119.29.29.29/32', '223.5.5.5/32'],
+      outbound: 'direct',
     },
     {
       clash_mode: 'Direct',
@@ -642,57 +808,697 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     },
   ];
 
+  // 1. AD-Block
   if (options.rulesets.includes('AD-Block')) {
     routingRules.push({
-      geosite: ['category-ads-all'],
+      rule_set: 'geosite-category-ads-all',
       outbound: 'block',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-category-ads-all',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-category-ads-all'),
+      download_detour: 'direct',
     });
   }
 
-  if (options.rulesets.includes('GeoIP:CN')) {
+  // 2. AI-Services
+  if (options.rulesets.includes('AI-Services') || options.rulesets.includes('OpenAI')) {
+    routingRules.push(
+      { rule_set: 'geosite-openai', outbound: 'proxy' },
+      { rule_set: 'geosite-anthropic', outbound: 'proxy' }
+    );
+    routeRuleSets.push(
+      {
+        type: 'remote',
+        tag: 'geosite-openai',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-openai'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-anthropic',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-anthropic'),
+        download_detour: 'direct',
+      }
+    );
+  }
+
+  // 3. Bilibili
+  if (options.rulesets.includes('Bilibili')) {
+    routingRules.push({
+      rule_set: 'geosite-bilibili',
+      outbound: 'direct',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-bilibili',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-bilibili'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 4. YouTube
+  if (options.rulesets.includes('YouTube')) {
+    routingRules.push({
+      rule_set: 'geosite-youtube',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-youtube',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-youtube'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 5. Google
+  if (options.rulesets.includes('Google')) {
+    routingRules.push({
+      rule_set: 'geosite-google',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-google',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-google'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 6. Private-Net
+  if (options.rulesets.includes('Private-Net')) {
+    routingRules.push({
+      ip_is_private: true,
+      outbound: 'direct',
+    });
+  }
+
+  // 7. China-Services
+  if (options.rulesets.includes('China-Services') || options.rulesets.includes('GeoIP:CN')) {
     routingRules.push(
       {
         domain_suffix: ['.cn', 'apple.com', 'mi.com', 'baidu.com', 'qq.com', 'taobao.com', 'alipay.com'],
         outbound: 'direct',
       },
       {
-        geoip: ['cn'],
+        rule_set: 'geosite-cn',
         outbound: 'direct',
+      },
+      {
+        rule_set: 'geoip-cn',
+        outbound: 'direct',
+      }
+    );
+    routeRuleSets.push(
+      {
+        type: 'remote',
+        tag: 'geosite-cn',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-cn'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geoip-cn',
+        format: 'binary',
+        url: getRulesetUrl('geoip', 'geoip-cn'),
+        download_detour: 'direct',
       }
     );
   }
 
-  const finalConfig = {
-    log: {
-      level: 'info',
-      timestamp: true,
-    },
-    dns: {
+  // 8. Telegram
+  if (options.rulesets.includes('Telegram')) {
+    routingRules.push(
+      {
+        rule_set: 'geosite-telegram',
+        outbound: 'proxy',
+      },
+      {
+        rule_set: 'geoip-telegram',
+        outbound: 'proxy',
+      }
+    );
+    routeRuleSets.push(
+      {
+        type: 'remote',
+        tag: 'geosite-telegram',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-telegram'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geoip-telegram',
+        format: 'binary',
+        url: getRulesetUrl('geoip', 'geoip-telegram'),
+        download_detour: 'direct',
+      }
+    );
+  }
+
+  // 9. GitHub
+  if (options.rulesets.includes('GitHub')) {
+    routingRules.push({
+      rule_set: 'geosite-github',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-github',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-github'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 10. Microsoft
+  if (options.rulesets.includes('Microsoft')) {
+    routingRules.push({
+      rule_set: 'geosite-microsoft',
+      outbound: 'direct',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-microsoft',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-microsoft'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 11. Apple
+  if (options.rulesets.includes('Apple')) {
+    routingRules.push({
+      rule_set: 'geosite-apple',
+      outbound: 'direct',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-apple',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-apple'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 12. Social-Media
+  if (options.rulesets.includes('Social-Media')) {
+    routingRules.push(
+      { rule_set: 'geosite-twitter', outbound: 'proxy' },
+      { rule_set: 'geosite-facebook', outbound: 'proxy' },
+      { rule_set: 'geosite-instagram', outbound: 'proxy' }
+    );
+    routeRuleSets.push(
+      {
+        type: 'remote',
+        tag: 'geosite-twitter',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-twitter'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-facebook',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-facebook'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-instagram',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-instagram'),
+        download_detour: 'direct',
+      }
+    );
+  }
+
+  // 13. Streaming
+  if (options.rulesets.includes('Streaming') || options.rulesets.includes('Netflix')) {
+    routingRules.push(
+      { rule_set: 'geosite-netflix', outbound: 'proxy' },
+      { rule_set: 'geoip-netflix', outbound: 'proxy' },
+      { rule_set: 'geosite-disney', outbound: 'proxy' },
+      { rule_set: 'geosite-hbo', outbound: 'proxy' }
+    );
+    routeRuleSets.push(
+      {
+        type: 'remote',
+        tag: 'geosite-netflix',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-netflix'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geoip-netflix',
+        format: 'binary',
+        url: getRulesetUrl('geoip', 'geoip-netflix'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-disney',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-disney'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-hbo',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-hbo'),
+        download_detour: 'direct',
+      }
+    );
+  }
+
+  // 14. Gaming
+  if (options.rulesets.includes('Gaming')) {
+    routingRules.push(
+      { rule_set: 'geosite-steam', outbound: 'proxy' },
+      { rule_set: 'geosite-epic', outbound: 'proxy' },
+      { rule_set: 'geosite-ea', outbound: 'proxy' },
+      { rule_set: 'geosite-nintendo', outbound: 'proxy' }
+    );
+    routeRuleSets.push(
+      {
+        type: 'remote',
+        tag: 'geosite-steam',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-steam'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-epic',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-epic'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-ea',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-ea'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-nintendo',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-nintendo'),
+        download_detour: 'direct',
+      }
+    );
+  }
+
+  // 15. Education
+  if (options.rulesets.includes('Education')) {
+    routingRules.push({
+      rule_set: 'geosite-category-scholar-education',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-category-scholar-education',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-category-scholar-education'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 16. Finance
+  if (options.rulesets.includes('Finance')) {
+    routingRules.push({
+      rule_set: 'geosite-category-finance',
+      outbound: 'direct',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-category-finance',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-category-finance'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 17. Cloud-Services
+  if (options.rulesets.includes('Cloud-Services')) {
+    routingRules.push(
+      { rule_set: 'geosite-cloudflare', outbound: 'proxy' },
+      { rule_set: 'geosite-aws', outbound: 'proxy' }
+    );
+    routeRuleSets.push(
+      {
+        type: 'remote',
+        tag: 'geosite-cloudflare',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-cloudflare'),
+        download_detour: 'direct',
+      },
+      {
+        type: 'remote',
+        tag: 'geosite-aws',
+        format: 'binary',
+        url: getRulesetUrl('geosite', 'geosite-aws'),
+        download_detour: 'direct',
+      }
+    );
+  }
+
+  // 18. Spotify
+  if (options.rulesets.includes('Spotify')) {
+    routingRules.push({
+      rule_set: 'geosite-spotify',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-spotify',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-spotify'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 19. TikTok
+  if (options.rulesets.includes('TikTok')) {
+    routingRules.push({
+      rule_set: 'geosite-tiktok',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-tiktok',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-tiktok'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 20. HuggingFace
+  if (options.rulesets.includes('HuggingFace')) {
+    routingRules.push({
+      domain_suffix: ['.huggingface.co', '.hf.co', '.hf.space'],
+      outbound: 'proxy',
+    });
+  }
+
+  // 21. Proxy-Services
+  if (options.rulesets.includes('Proxy-Services')) {
+    routingRules.push({
+      rule_set: 'geosite-category-proxy',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-category-proxy',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-category-proxy'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 22. Proxy-Media
+  if (options.rulesets.includes('Proxy-Media')) {
+    routingRules.push({
+      rule_set: 'geosite-category-media',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-category-media',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-category-media'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 23. EHentai
+  if (options.rulesets.includes('EHentai')) {
+    routingRules.push({
+      domain_suffix: ['.e-hentai.org', '.exhentai.org', 'e-hentai.org', 'exhentai.org'],
+      outbound: 'proxy',
+    });
+  }
+
+  // 24. Global-Services (Non-China)
+  if (options.rulesets.includes('Global-Services')) {
+    routingRules.push({
+      rule_set: 'geosite-geolocation-!cn',
+      outbound: 'proxy',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geosite-geolocation-!cn',
+      format: 'binary',
+      url: getRulesetUrl('geosite', 'geosite-geolocation-!cn'),
+      download_detour: 'direct',
+    });
+  }
+
+  // 25. Custom user-defined rules
+  if (options.customRules && options.customRules.length > 0) {
+    for (const rule of options.customRules) {
+      if (rule.type === 'domain') {
+        routingRules.push({ domain: [rule.value], outbound: rule.outbound });
+      } else if (rule.type === 'ip') {
+        routingRules.push({ ip_cidr: [rule.value], outbound: rule.outbound });
+      } else if (rule.type === 'rule_set') {
+        const tag = 'custom-' + rule.value.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+        routingRules.push({ rule_set: tag, outbound: rule.outbound });
+        routeRuleSets.push({
+          type: 'remote',
+          tag,
+          format: 'binary',
+          url: rule.value,
+          download_detour: 'direct',
+        });
+      }
+    }
+  }
+
+  const configInbounds: any[] = [];
+  if (options.enableTun !== false) {
+    configInbounds.push({
+      type: 'tun',
+      address: ['172.19.0.1/30'],
+      auto_route: true,
+      strict_route: true,
+    });
+  }
+  if (options.enableMixed !== false) {
+    const portNum = options.mixedPort ? parseInt(options.mixedPort, 10) : 2080;
+    configInbounds.push({
+      type: 'mixed',
+      listen: '::',
+      listen_port: isNaN(portNum) ? 2080 : portNum,
+    });
+  }
+
+  let finalConfig: any = {};
+  if (options.customBaseTemplate) {
+    try {
+      finalConfig = JSON.parse(options.customBaseTemplate);
+    } catch (e) {
+      // Fallback to empty if invalid
+    }
+  }
+
+  // Ensure log structure is present
+  finalConfig.log = finalConfig.log || {
+    level: 'info',
+    timestamp: true,
+  };
+
+  // Ensure dns structure is present
+  if (!finalConfig.dns) {
+    finalConfig.dns = {
       servers: dnsServers,
       rules: dnsRules,
       strategy: 'ipv4_only',
-    },
-    inbounds: [
-      {
-        type: 'tun',
-        inet4_address: '172.19.0.1/30',
-        auto_route: true,
-        strict_route: true,
-        sniff: true,
-      },
-      {
-        type: 'mixed',
-        listen: '::',
-        listen_port: 2080,
-        sniff: true,
-      },
-    ],
-    outbounds: outbounds,
-    route: {
+    };
+  } else {
+    // Append or default
+    finalConfig.dns.servers = finalConfig.dns.servers || dnsServers;
+    finalConfig.dns.rules = [
+      ...(finalConfig.dns.rules || []),
+      ...dnsRules
+    ];
+    finalConfig.dns.strategy = finalConfig.dns.strategy || 'ipv4_only';
+  }
+
+  // Add fakeip settings if active
+  if (options.dnsStrategy === 'fakeip') {
+    finalConfig.dns.fakeip = finalConfig.dns.fakeip || {
+      enabled: true,
+      inet4_range: '198.18.0.0/15',
+    };
+  }
+
+  // Handle inbounds
+  if (!finalConfig.inbounds || finalConfig.inbounds.length === 0) {
+    finalConfig.inbounds = configInbounds;
+  } else {
+    const existingTypes = new Set(finalConfig.inbounds.map((ib: any) => ib.type));
+    for (const ib of configInbounds) {
+      if (!existingTypes.has(ib.type)) {
+        finalConfig.inbounds.push(ib);
+      }
+    }
+  }
+
+  // Handle outbounds
+  if (!finalConfig.outbounds) {
+    finalConfig.outbounds = outbounds;
+  } else {
+    // Append generated outbounds avoiding duplicates
+    const baseOutboundTags = new Set(finalConfig.outbounds.map((ob: any) => ob.tag));
+    for (const ob of outbounds) {
+      if (!baseOutboundTags.has(ob.tag)) {
+        finalConfig.outbounds.push(ob);
+      }
+    }
+  }
+
+  // Handle route
+  if (!finalConfig.route) {
+    finalConfig.route = {
       rules: routingRules,
       auto_detect_interface: true,
-    },
-  };
+    };
+  } else {
+    finalConfig.route.auto_detect_interface = finalConfig.route.auto_detect_interface !== undefined 
+      ? finalConfig.route.auto_detect_interface 
+      : true;
+    finalConfig.route.rules = [
+      ...(finalConfig.route.rules || []),
+      ...routingRules
+    ];
+  }
+
+  // Add modern rule_sets if we have defined them
+  if (routeRuleSets.length > 0) {
+    finalConfig.route.rule_set = finalConfig.route.rule_set || [];
+    const seenTags = new Set<string>(finalConfig.route.rule_set.map((rs: any) => rs.tag));
+    for (const rs of routeRuleSets) {
+      if (!seenTags.has(rs.tag)) {
+        seenTags.add(rs.tag);
+        finalConfig.route.rule_set.push(rs);
+      }
+    }
+  }
+
+  // Add experimental Clash API block if enabled
+  if (options.enableClashApi) {
+    finalConfig.experimental = finalConfig.experimental || {};
+    finalConfig.experimental.clash_api = finalConfig.experimental.clash_api || {
+      external_controller: options.clashApiPort || '0.0.0.0:9090',
+      external_ui: 'yacd',
+      external_ui_download_url: options.clashUiUrl || 'https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip',
+      default_mode: 'rule'
+    };
+  }
 
   return JSON.stringify(finalConfig, null, 2);
+}
+
+export function serializeNodeToUri(node: ProxyNode): string {
+  // If the raw field is already a valid protocol URL, return it
+  if (node.raw && /^(vmess|vless|ss|trojan|hysteria2|hy2|tuic):\/\//i.test(node.raw)) {
+    return node.raw.trim();
+  }
+
+  const nameEncoded = encodeURIComponent(node.name);
+
+  switch (node.type) {
+    case 'vmess': {
+      const obj = {
+        v: '2',
+        ps: node.name,
+        add: node.server,
+        port: String(node.port),
+        id: node.uuid || '',
+        aid: '0',
+        scy: 'auto',
+        net: node.network || 'tcp',
+        type: 'none',
+        host: node.host || '',
+        path: node.path || '',
+        tls: node.tls ? 'tls' : '',
+        sni: node.sni || '',
+      };
+      try {
+        const jsonStr = JSON.stringify(obj);
+        // Safe base64 encoding that supports UTF-8 characters like Chinese node names
+        const bytes = new TextEncoder().encode(jsonStr);
+        let binStr = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binStr += String.fromCharCode(bytes[i]);
+        }
+        const encoded = btoa(binStr);
+        return `vmess://${encoded}`;
+      } catch (e) {
+        return `vmess://`;
+      }
+    }
+    case 'vless': {
+      const params = new URLSearchParams();
+      if (node.network) params.set('type', node.network);
+      if (node.path) params.set('path', node.path);
+      if (node.host) params.set('host', node.host);
+      if (node.tls) params.set('security', 'tls');
+      if (node.sni) params.set('sni', node.sni);
+      const query = params.toString();
+      return `vless://${node.uuid || ''}@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
+    }
+    case 'ss': {
+      const auth = `${node.method || 'aes-256-gcm'}:${node.password || ''}`;
+      try {
+        // Safe base64 encoding
+        const bytes = new TextEncoder().encode(auth);
+        let binStr = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+          binStr += String.fromCharCode(bytes[i]);
+        }
+        const authEncoded = btoa(binStr);
+        return `ss://${authEncoded}@${node.server}:${node.port}#${nameEncoded}`;
+      } catch (e) {
+        return `ss://${node.server}:${node.port}#${nameEncoded}`;
+      }
+    }
+    case 'trojan': {
+      const params = new URLSearchParams();
+      if (node.sni) params.set('sni', node.sni);
+      if (node.host) params.set('peer', node.host);
+      const query = params.toString();
+      return `trojan://${node.password || ''}@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
+    }
+    case 'hysteria2': {
+      const params = new URLSearchParams();
+      if (node.sni) params.set('sni', node.sni);
+      const query = params.toString();
+      const authPart = node.password || node.auth || '';
+      return `hysteria2://${authPart}@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
+    }
+    case 'tuic': {
+      const params = new URLSearchParams();
+      if (node.uuid) params.set('uuid', node.uuid);
+      if (node.password) params.set('pass', node.password);
+      if (node.alpn && node.alpn.length) params.set('alpn', node.alpn.join(','));
+      const query = params.toString();
+      return `tuic://@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
+    }
+    default:
+      return node.raw || '';
+  }
 }

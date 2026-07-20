@@ -1,6 +1,0 @@
-{
-  "name": "NodeFlow Converter",
-  "description": "An advanced, high-performance proxy subscription converter that parses Clash, Surge, Quantumult X, and V2Ray nodes, converting them into the latest Sing-Box configuration with online import and AI-powered smart parsing.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

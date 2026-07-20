@@ -5,7 +5,6 @@
 
 import { useState, useEffect } from 'react';
 import {
-  Shield,
   ArrowLeftRight,
   Copy,
   Download,
@@ -16,17 +15,95 @@ import {
   Check,
   AlertCircle,
   Terminal,
-  Server,
-  FileText,
   Search,
   CheckCircle,
   ExternalLink,
-  ChevronRight,
   Cpu,
   Languages,
-  QrCode
+  Link,
+  BookMarked,
 } from 'lucide-react';
-import { parseSubscription, generateSingBoxConfig, ProxyNode } from './utils/parser';
+import { parseSubscription, generateSingBoxConfig, ProxyNode, serializeNodeToUri } from './utils/parser';
+import minimalPreset from '../presets/minimal.json';
+import standardPreset from '../presets/standard.json';
+import fullPreset from '../presets/full.json';
+
+const DEFAULT_BASE_TEMPLATE = `{
+  "$schema": "https://raw.githubusercontent.com/xmdhs/sing-box-generate-schema/refs/heads/master/schema.generated.json",
+  "log": {
+    "level": "info",
+    "timestamp": true
+  }
+}`;
+
+// Presets are loaded from presets/*.json — add new .json files there and register below
+const BASE_CONFIG_PRESETS: Record<string, string> = {
+  minimal: JSON.stringify(minimalPreset, null, 2),
+  standard: JSON.stringify(standardPreset, null, 2),
+  full: JSON.stringify(fullPreset, null, 2),
+};
+
+const PRESET_LABELS: Record<string, string> = {
+  minimal: 'Minimal (仅日志)',
+  standard: 'Standard (日志 + DNS)',
+  full: 'Full (日志 + DNS + TUN + Clash API)',
+};
+
+// Singleton-Box config validation
+function validateBaseConfig(jsonStr: string): { valid: boolean; messages: string[] } {
+  const messages: string[] = [];
+  if (!jsonStr.trim()) {
+    return { valid: false, messages: ['配置为空'] };
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (e: any) {
+    return { valid: false, messages: [`JSON 解析错误: ${e.message}`] };
+  }
+  // Check deprecated top-level fields
+  if (parsed.dns?.servers) {
+    for (const s of parsed.dns.servers) {
+      if (s.address !== undefined) {
+        messages.push('DNS 服务器使用了已废弃的 "address" 字段，请改用 "type" + "server"');
+      }
+    }
+    for (const r of parsed.dns.rules || []) {
+      if (r.outbound === 'dns_direct' || r.outbound === 'dns_proxy') {
+        messages.push('DNS 规则中的 "outbound" 应引用 DNS 服务器 tag，而非直接匹配 dns_direct/dns_proxy');
+      }
+    }
+  }
+  // Check deprecated outbound fields
+  const checkOutbound = (ob: any) => {
+    if (ob.alter_id !== undefined) {
+      messages.push(`节点 "${ob.tag || 'unknown'}" 包含已废弃的 "alter_id" 字段`);
+    }
+    if (ob.transport?.type === 'ws' && ob.transport.headers?.Host) {
+      messages.push(`节点 "${ob.tag || 'unknown'}" 使用 WS 传输时，建议用 tls.server_name 替代 headers.Host`);
+    }
+  };
+  if (parsed.outbounds) {
+    for (const ob of parsed.outbounds) {
+      checkOutbound(ob);
+    }
+  }
+  if (parsed.inbounds) {
+    // Check deprecated inbound fields
+    for (const ib of parsed.inbounds) {
+      if (ib.inet4_address !== undefined || ib.inet6_address !== undefined) {
+        messages.push(`Inbound "${ib.type}" 使用了已废弃的 inet4_address/inet6_address，请改用 "address"`);
+      }
+    }
+  }
+  if (!parsed.log) messages.push('建议添加 "log" 配置块以便排查问题');
+  if (!parsed.dns) messages.push('建议添加 "dns" 配置块');
+  if (!parsed.inbounds || parsed.inbounds.length === 0) messages.push('建议添加 "inbounds" 配置（TUN 或 Mixed）');
+  if (!parsed.outbounds || parsed.outbounds.length === 0) messages.push('建议添加 "outbounds" 配置');
+  if (!parsed.route) messages.push('建议添加 "route" 配置');
+  if (messages.length === 0) messages.push('配置格式检查通过，未发现兼容性问题');
+  return { valid: messages.filter(m => m.includes('已废弃') || m.includes('JSON 解析')).length === 0, messages };
+}
 
 // Sample nodes to let the user try out the converter instantly
 const SAMPLE_NODES = `# NodeFlow Subscription Example (Standard protocol links)
@@ -63,9 +140,9 @@ const LOCALES = {
   zh: {
     title: "NodeFlow 订阅转换器",
     subtitle: "多协议代理 Sing-Box 在线转换工具",
-    stableBadge: "v1.0.0 预览版",
+    stableBadge: "v0.0.1",
     rawLines: "行原始数据",
-    sourceTitle: "源节点配置信息 / 订阅链接",
+    sourceTitle: "源节点配置信息",
     nodeInputPlaceholder: `在此粘贴您的订阅链接内容或节点协议 URL。支持以下协议及格式：
 - VMess 链接 (vmess://)
 - VLESS 链接 (vless://)
@@ -89,14 +166,33 @@ const LOCALES = {
     conversionParamsTitle: "自定义转换参数",
     conversionParamsDesc: "根据您的网络偏好与代理规范，灵活自定义 DNS、路由逻辑和规则规则集",
     localCompileBtn: "本地转换 (免流量)",
-    aiSmartParseBtn: "Gemini AI 智能解析 (推荐)",
-    aiConvertingBtn: "AI 正在智能提取转换...",
-    aiErrorTitle: "AI 处理失败",
     schemaTemplateLabel: "目标核心版本/格式",
     dnsStrategyLabel: "DNS 解析策略",
-    preconfiguredRulesetsLabel: "预装流水分流规则集",
-    blockAdsLabel: "广告屏蔽过滤",
-    chinaBypassLabel: "大陆局域网绕过 (直连)",
+    preconfiguredRulesetsLabel: "分流规则集配置 (可多选)",
+    blockAdsLabel: "🔴 广告拦截",
+    openaiLabel: "🤖 AI 服务",
+    bilibiliLabel: "📺 哔哩哔哩",
+    youtubeLabel: "📺 油管视频",
+    googleLabel: "🔍 谷歌服务",
+    privateNetLabel: "🏠 私有网络",
+    chinaBypassLabel: "🔒 国内服务",
+    telegramLabel: "📱 电报消息",
+    githubLabel: "🐱 Github",
+    microsoftLabel: "🪟 微软服务",
+    appleLabel: "🍎 苹果服务",
+    socialMediaLabel: "🌐 社交媒体",
+    streamingLabel: "📺 流媒体",
+    gamingLabel: "🎮 游戏平台",
+    educationLabel: "📚 教育资源",
+    financeLabel: "💰 金融服务",
+    cloudServicesLabel: "☁️ 云服务",
+    spotifyLabel: "🎵 Spotify",
+    tiktokLabel: "🎨 tiktok",
+    huggingfaceLabel: "😀 huggingface",
+    proxyServicesLabel: "🔀 代理服务",
+    proxyMediaLabel: "🎭 代理媒体",
+    eHentaiLabel: "🔞 E-Hentai",
+    globalServicesLabel: "🌍 非中国",
     successfullyExtractedLabel: "节点提取统计",
     nodesCompiledLabel: "个节点已编译",
     noNodeTypesParsed: "暂无提取节点",
@@ -122,8 +218,6 @@ const LOCALES = {
     toastDownloadFail: "下载文件失败，请重试",
     toastSubFetchedSuccess: "在线订阅节点拉取并加载成功！",
     toastSubFetchedFail: "拉取外部订阅失败：",
-    toastAiFetchedSuccess: "Gemini AI 已成功解析配置并转换！",
-    toastAiFetchedFail: "AI 解析失败：",
     toastLoadedSamples: "已成功加载标准协议 URL 示例",
     toastLoadedClashSamples: "已成功加载 Clash YAML 节点示例",
     toastCleared: "输入数据已清空",
@@ -133,17 +227,30 @@ const LOCALES = {
     emptySubUrlError: "请输入合法的订阅 URL 链接",
     emptyInputTextError: "输入配置内容不能为空",
     subUrlBtn: "订阅链接",
-    subModalTitle: "生成订阅链接 & 扫码导入",
+    subModalTitle: "生成订阅链接",
     subModalDesc: "您可以通过以下链接直接导入至 Sing-Box、Clash Meta 或其它兼容客户端。此链接由本地节点配置实时在线编译生成：",
-    subModalExplain: "使用支持扫码的客户端（例如手机端 Sing-Box 或其它代理软件）扫描下方二维码即可一键导入。",
     subModalCopyBtn: "复制订阅链接",
     subModalCloseBtn: "关闭",
-    toastSubLinkCopied: "订阅链接已成功复制到剪切板！"
+    toastSubLinkCopied: "订阅链接已成功复制到剪切板！",
+    cdnPrefixLabel: "规则集下载 CDN 加速",
+    cdnPrefixDesc: "选择或自定义用于下载 Sing-Box 规则集的 CDN 加速域名，以防由于网络不通导致拉取失败。",
+    cdnTypeTestingcf: "jsDelivr (TestingCF - 推荐)",
+    cdnTypeFastly: "jsDelivr (Fastly)",
+    cdnTypeGcore: "jsDelivr (GCore)",
+    cdnTypeMain: "jsDelivr (Main)",
+    cdnTypeDirect: "GitHub (直连 - 无 CDN)",
+    cdnTypeCustom: "自定义 CDN 前缀...",
+    customCdnPlaceholder: "例如 https://raw.githubusercontent.com 或您的自建反代...",
+    tunModeLabel: "🌐 启用 TUN 网卡模式",
+    tunModeDesc: "创建虚拟网卡接管系统全局流量，适合整机系统级代理",
+    systemProxyLabel: "🔌 启用 Mixed 端口 (系统代理)",
+    systemProxyDesc: "开启 HTTP/SOCKS 混合代理端口以供客户端手动/自动设置代理",
+    mixedPortLabel: "Mixed 混合代理端口",
   },
   en: {
     title: "NodeFlow Converter",
     subtitle: "Multi-Protocol Proxy Converter for Sing-Box",
-    stableBadge: "v1.0.0 Preview",
+    stableBadge: "v0.0.1",
     rawLines: "Raw Lines",
     sourceTitle: "Source Node Configuration",
     nodeInputPlaceholder: `Paste your subscription link content or protocol URLs here. Supports:
@@ -169,14 +276,33 @@ const LOCALES = {
     conversionParamsTitle: "Conversion Parameters",
     conversionParamsDesc: "Customize DNS configuration routing strategies and rulesets",
     localCompileBtn: "Local Compile",
-    aiSmartParseBtn: "AI Smart Parse (Gemini)",
-    aiConvertingBtn: "AI Converting...",
-    aiErrorTitle: "AI Processing Error",
     schemaTemplateLabel: "Target Schema Template",
     dnsStrategyLabel: "DNS Strategy Mode",
-    preconfiguredRulesetsLabel: "Preconfigured Rulesets",
-    blockAdsLabel: "Block Ads",
-    chinaBypassLabel: "China Bypass",
+    preconfiguredRulesetsLabel: "Rulesets Routing Configuration (Multi-select)",
+    blockAdsLabel: "🔴 Block Ads",
+    openaiLabel: "🤖 AI Services",
+    bilibiliLabel: "📺 Bilibili",
+    youtubeLabel: "📺 YouTube",
+    googleLabel: "🔍 Google Services",
+    privateNetLabel: "🏠 Private Network",
+    chinaBypassLabel: "🔒 China Services",
+    telegramLabel: "📱 Telegram",
+    githubLabel: "🐱 GitHub",
+    microsoftLabel: "🪟 Microsoft Services",
+    appleLabel: "🍎 Apple Services",
+    socialMediaLabel: "🌐 Social Media",
+    streamingLabel: "📺 Streaming",
+    gamingLabel: "🎮 Gaming Platforms",
+    educationLabel: "📚 Education",
+    financeLabel: "💰 Finance Services",
+    cloudServicesLabel: "☁️ Cloud Services",
+    spotifyLabel: "🎵 Spotify",
+    tiktokLabel: "🎨 TikTok",
+    huggingfaceLabel: "😀 HuggingFace",
+    proxyServicesLabel: "🔀 Proxy Services",
+    proxyMediaLabel: "🎭 Proxy Media",
+    eHentaiLabel: "🔞 E-Hentai",
+    globalServicesLabel: "🌍 Non-China",
     successfullyExtractedLabel: "Successfully Extracted",
     nodesCompiledLabel: "Nodes Compiled",
     noNodeTypesParsed: "No node types parsed yet",
@@ -202,8 +328,6 @@ const LOCALES = {
     toastDownloadFail: "Failed to trigger file download",
     toastSubFetchedSuccess: "Subscription successfully fetched and loaded!",
     toastSubFetchedFail: "Fetch error: ",
-    toastAiFetchedSuccess: "Gemini AI parsed and converted configuration successfully!",
-    toastAiFetchedFail: "AI error: ",
     toastLoadedSamples: "Loaded standard protocol samples",
     toastLoadedClashSamples: "Loaded Clash YAML samples",
     toastCleared: "Cleared input",
@@ -213,12 +337,25 @@ const LOCALES = {
     emptySubUrlError: "Please enter a subscription URL first",
     emptyInputTextError: "Input text cannot be empty",
     subUrlBtn: "Sub Link",
-    subModalTitle: "Subscription Link & QR Code",
+    subModalTitle: "Subscription Link",
     subModalDesc: "You can import this link directly into Sing-Box, Clash Meta, or other compatible clients. Generated in real-time from your raw nodes:",
-    subModalExplain: "Scan the QR Code below with your mobile client (e.g. Sing-Box) to import the configuration instantly.",
     subModalCopyBtn: "Copy Sub Link",
     subModalCloseBtn: "Close",
-    toastSubLinkCopied: "Subscription link copied to clipboard!"
+    toastSubLinkCopied: "Subscription link copied to clipboard!",
+    cdnPrefixLabel: "Ruleset CDN Acceleration",
+    cdnPrefixDesc: "Select or define a CDN prefix for remote ruleset downloads to bypass local connectivity issues.",
+    cdnTypeTestingcf: "jsDelivr (TestingCF - Rec.)",
+    cdnTypeFastly: "jsDelivr (Fastly)",
+    cdnTypeGcore: "jsDelivr (GCore)",
+    cdnTypeMain: "jsDelivr (Main)",
+    cdnTypeDirect: "GitHub (Direct - No CDN)",
+    cdnTypeCustom: "Custom CDN Prefix...",
+    customCdnPlaceholder: "e.g., https://raw.githubusercontent.com or your custom reverse proxy...",
+    tunModeLabel: "🌐 Enable TUN Interface Mode",
+    tunModeDesc: "Create virtual network card to route all system traffic",
+    systemProxyLabel: "🔌 Enable Mixed Port (System Proxy)",
+    systemProxyDesc: "Expose HTTP/SOCKS mixed port for manual or auto proxy",
+    mixedPortLabel: "Mixed Proxy Port",
   }
 };
 
@@ -236,59 +373,110 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'preview' | 'nodes'>('preview');
 
   // Parameters
-  const [template, setTemplate] = useState<'singbox-latest' | 'singbox-v1.8' | 'clash-meta'>('singbox-latest');
+  const template = 'singbox-latest';
   const [dnsStrategy, setDnsStrategy] = useState<'system' | 'fakeip' | 'custom'>('system');
-  const [rulesets, setRulesets] = useState<string[]>(['AD-Block', 'GeoIP:CN']);
+  const [rulesets, setRulesets] = useState<string[]>(['AD-Block', 'China-Services', 'Private-Net']);
+
+  // General & Clash API parameters
+  const [groupByCountry, setGroupByCountry] = useState<boolean>(true);
+  const [includeAutoGroup, setIncludeAutoGroup] = useState<boolean>(true);
+  const [enableClashApi, setEnableClashApi] = useState<boolean>(true);
+  const [clashApiPort, setClashApiPort] = useState<string>('0.0.0.0:9090');
+  const [clashUiUrl, setClashUiUrl] = useState<string>('https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip');
+  
+  // Tun & Mixed (System Proxy) settings
+  const [enableTun, setEnableTun] = useState<boolean>(true);
+  const [enableMixed, setEnableMixed] = useState<boolean>(true);
+  const [mixedPort, setMixedPort] = useState<string>('2080');
+
+  // CDN Acceleration parameters
+  const [cdnType, setCdnType] = useState<string>('testingcf');
+  const [customCdn, setCustomCdn] = useState<string>('');
 
   // Loading & feedback statuses
   const [isFetchingSub, setIsFetchingSub] = useState(false);
   const [subFetchError, setSubFetchError] = useState('');
-  const [isAiConverting, setIsAiConverting] = useState(false);
-  const [aiError, setAiError] = useState('');
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [copySubFeedback, setCopySubFeedback] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info', message: string } | null>(null);
-  const [isSubModalOpen, setIsSubModalOpen] = useState(false);
 
-  // Safe base64 encoding supporting UTF-8 for URLs
-  const safeBtoa = (str: string): string => {
-    try {
-      const bytes = new TextEncoder().encode(str);
-      let binString = "";
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binString += String.fromCharCode(bytes[i]);
-      }
-      return btoa(binString);
-    } catch (e) {
-      return btoa(unescape(encodeURIComponent(str)));
+
+
+  // Custom Base Template States
+  const [customBaseTemplate, setCustomBaseTemplate] = useState<string>(() => {
+    return localStorage.getItem('nodeflow_custom_base_template') || DEFAULT_BASE_TEMPLATE;
+  });
+  const [isValidJson, setIsValidJson] = useState<boolean>(true);
+  const [, setJsonError] = useState<string>('');
+  const [baseConfigMode, setBaseConfigMode] = useState<'custom' | 'preset'>('preset');
+  const [selectedPreset, setSelectedPreset] = useState('minimal');
+  const [importUrl, setImportUrl] = useState('');
+  const [validationResult, setValidationResult] = useState<{ valid: boolean; messages: string[] } | null>(null);
+  const [customRules, setCustomRules] = useState<{ type: 'domain' | 'ip' | 'rule_set'; value: string; outbound: 'proxy' | 'direct' | 'block' }[]>([]);
+  const [newRuleType, setNewRuleType] = useState<'domain' | 'ip' | 'rule_set'>('domain');
+  const [newRuleValue, setNewRuleValue] = useState('');
+  const [newRuleOutbound, setNewRuleOutbound] = useState<'proxy' | 'direct'>('proxy');
+
+  // Validate custom base template in real-time
+  useEffect(() => {
+    if (!customBaseTemplate.trim()) {
+      setIsValidJson(true);
+      setJsonError('');
+      return;
     }
-  };
+    try {
+      JSON.parse(customBaseTemplate);
+      setIsValidJson(true);
+      setJsonError('');
+    } catch (err: any) {
+      setIsValidJson(false);
+      setJsonError(err.message);
+    }
+  }, [customBaseTemplate]);
 
-  const getSubLinkUrl = () => {
-    const base64Input = safeBtoa(rawInput);
-    const rulesetsStr = rulesets.join(',');
-    return `${window.location.origin}/api/sub?config=${encodeURIComponent(base64Input)}&template=${template}&dns=${dnsStrategy}&rulesets=${encodeURIComponent(rulesetsStr)}`;
-  };
+  // Persist custom base template to localStorage
+  useEffect(() => {
+    localStorage.setItem('nodeflow_custom_base_template', customBaseTemplate);
+  }, [customBaseTemplate]);
 
   // Parse local raw nodes whenever input or options change
   useEffect(() => {
     const nodes = parseSubscription(rawInput);
     setParsedNodes(nodes);
     
+    const resolvedCdnPrefix = cdnType === 'custom'
+      ? customCdn.trim()
+      : (cdnType === 'fastly' ? 'https://fastly.jsdelivr.net'
+         : cdnType === 'gcore' ? 'https://gcore.jsdelivr.net'
+         : cdnType === 'cdn' ? 'https://cdn.jsdelivr.net'
+         : cdnType === 'github' ? 'https://raw.githubusercontent.com'
+         : 'https://testingcf.jsdelivr.net');
+
     // Generate singbox config using offline parser
     const generated = generateSingBoxConfig(nodes, {
       template,
       dnsStrategy,
       rulesets,
+      groupByCountry,
+      includeAutoGroup,
+      enableClashApi,
+      clashApiPort,
+      clashUiUrl,
+      cdnPrefix: resolvedCdnPrefix,
+      enableTun,
+      enableMixed,
+      mixedPort,
+      customBaseTemplate: isValidJson ? customBaseTemplate : undefined,
+      customRules,
     });
     setSingBoxConfig(generated);
-  }, [rawInput, template, dnsStrategy, rulesets]);
+  }, [rawInput, template, dnsStrategy, rulesets, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customBaseTemplate, isValidJson, customRules]);
 
   // Handle auto-closing notifications
   useEffect(() => {
-    if (notification) {
-      const timer = setTimeout(() => setNotification(null), 5000);
-      return () => clearTimeout(timer);
-    }
+    if (!notification) return;
+    const timer = setTimeout(() => setNotification(null), 5000);
+    return () => clearTimeout(timer);
   }, [notification]);
 
   // Copy output to clipboard
@@ -300,6 +488,45 @@ export default function App() {
       setTimeout(() => setCopyFeedback(false), 2000);
     } catch (err) {
       setNotification({ type: 'error', message: t.toastCopiedFail });
+    }
+  };
+
+  // Copy compiled online subscription URL to clipboard
+  const handleCopySubLink = async () => {
+    if (!rawInput.trim()) {
+      setNotification({ type: 'error', message: t.emptyInputTextError });
+      return;
+    }
+    try {
+      // Safe base64 encoding
+      const bytes = new TextEncoder().encode(rawInput.trim());
+      let binStr = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binStr += String.fromCharCode(bytes[i]);
+      }
+      const base64Config = btoa(binStr);
+      
+      const params = new URLSearchParams();
+      params.set('config', base64Config);
+      if (template) params.set('template', template);
+      if (dnsStrategy) params.set('dns', dnsStrategy);
+      if (rulesets.length > 0) params.set('rulesets', rulesets.join(','));
+      params.set('groupByCountry', String(groupByCountry));
+      params.set('includeAutoGroup', String(includeAutoGroup));
+      params.set('enableClashApi', String(enableClashApi));
+      if (clashApiPort) params.set('clashApiPort', clashApiPort);
+      if (clashUiUrl) params.set('clashUiUrl', clashUiUrl);
+      
+      const subUrlString = `${window.location.origin}/api/sub?${params.toString()}`;
+      await navigator.clipboard.writeText(subUrlString);
+      setCopySubFeedback(true);
+      setNotification({ type: 'success', message: t.toastSubLinkCopied });
+      setTimeout(() => setCopySubFeedback(false), 2000);
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: lang === 'zh' ? '复制订阅链接失败，请重试' : 'Failed to copy subscription link, please try again'
+      });
     }
   };
 
@@ -321,12 +548,36 @@ export default function App() {
     }
   };
 
-  const handleCopySubLink = async () => {
+  const handleParseToUris = () => {
+    if (!rawInput.trim()) {
+      setNotification({ type: 'error', message: t.emptyInputTextError });
+      return;
+    }
+
     try {
-      await navigator.clipboard.writeText(getSubLinkUrl());
-      setNotification({ type: 'success', message: t.toastSubLinkCopied });
-    } catch (err) {
-      setNotification({ type: 'error', message: t.toastCopiedFail });
+      const nodes = parseSubscription(rawInput);
+      if (nodes.length === 0) {
+        setNotification({
+          type: 'error',
+          message: lang === 'zh' ? '未能解析到任何有效代理节点！' : 'No valid proxy nodes could be parsed!'
+        });
+        return;
+      }
+
+      // Convert each parsed node to standard URI representation
+      const uris = nodes.map(node => serializeNodeToUri(node));
+      setRawInput(uris.join('\n'));
+      setNotification({
+        type: 'success',
+        message: lang === 'zh'
+          ? `成功解析并转换 ${nodes.length} 个节点连接！`
+          : `Successfully parsed and converted ${nodes.length} proxy URIs!`
+      });
+    } catch (e: any) {
+      setNotification({
+        type: 'error',
+        message: (lang === 'zh' ? '解析出错：' : 'Parsing error: ') + (e.message || '')
+      });
     }
   };
 
@@ -354,60 +605,6 @@ export default function App() {
       setNotification({ type: 'error', message: `${t.toastSubFetchedFail}${err.message}` });
     } finally {
       setIsFetchingSub(false);
-    }
-  };
-
-  // Trigger Gemini AI conversion for complex or unparseable text
-  const handleAIConversion = async () => {
-    if (!rawInput.trim()) {
-      setAiError(t.emptyInputTextError);
-      return;
-    }
-
-    setIsAiConverting(true);
-    setAiError('');
-    try {
-      const response = await fetch('/api/convert-ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rawConfig: rawInput,
-          options: {
-            dnsStrategy,
-            rulesets,
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `AI Conversion failed with status ${response.status}`);
-      }
-
-      const generatedConfig = await response.json();
-      setSingBoxConfig(JSON.stringify(generatedConfig, null, 2));
-      
-      // Update nodes parsed count if the AI provided standard outbounds
-      if (generatedConfig.outbounds && Array.isArray(generatedConfig.outbounds)) {
-        const aiNodes: ProxyNode[] = generatedConfig.outbounds
-          .filter((ob: any) => ob.type && ob.type !== 'selector' && ob.type !== 'urltest' && ob.type !== 'direct' && ob.type !== 'block' && ob.type !== 'dns')
-          .map((ob: any) => ({
-            type: ob.type === 'shadowsocks' ? 'ss' : ob.type,
-            name: ob.tag || 'AI-Parsed-Node',
-            server: ob.server || 'unknown',
-            port: ob.server_port || 443,
-            raw: JSON.stringify(ob),
-          }));
-        setParsedNodes(aiNodes);
-      }
-
-      setNotification({ type: 'success', message: t.toastAiFetchedSuccess });
-    } catch (err: any) {
-      console.error(err);
-      setAiError(err.message || 'Failed to communicate with AI endpoint. Please check your GEMINI_API_KEY.');
-      setNotification({ type: 'error', message: `${t.toastAiFetchedFail}${err.message || 'Failed'}` });
-    } finally {
-      setIsAiConverting(false);
     }
   };
 
@@ -525,7 +722,78 @@ export default function App() {
 
       {/* Bento Grid Body */}
       <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl w-full mx-auto">
-        
+
+        {/* Row 0 / Full: Sing-Box Ecosystem Info */}
+        <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <BookMarked className="w-5 h-5 text-indigo-500" />
+            <h2 className="text-base font-bold text-slate-800 font-display">
+              {lang === 'zh' ? 'Sing-Box 生态简介' : 'Sing-Box Ecosystem'}
+            </h2>
+          </div>
+
+          <p className="text-xs text-slate-500 leading-relaxed">
+            {lang === 'zh'
+              ? 'Sing-Box 是通用代理平台，社区有多个分支魔改版本与 Web 面板可供选择。以下资源均由 enpioodada/sing-box-core 仓库整合发布。'
+              : 'Sing-Box is a universal proxy platform with community forks and web dashboards. Resources are bundled by enpioodada/sing-box-core.'}
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            {/* Kernels */}
+            <div>
+              <h4 className="font-bold text-slate-700 mb-1.5">
+                {lang === 'zh' ? '🧩 内核版本' : 'Kernels'}
+              </h4>
+              <div className="space-y-1">
+                <a href="https://github.com/SagerNet/sing-box" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />sing-box 官方 — SagerNet/sing-box
+                </a>
+                <a href="https://github.com/PuerNya/sing-box/tree/building" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />PuerNya 版 — PuerNya/sing-box
+                </a>
+                <a href="https://github.com/reF1nd/sing-box/tree/reF1nd-stable" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />reF1nd-Stable — reF1nd/sing-box
+                </a>
+                <a href="https://github.com/reF1nd/sing-box/tree/reF1nd-testing" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />reF1nd-Test — reF1nd/sing-box
+                </a>
+              </div>
+            </div>
+
+            {/* Dashboards */}
+            <div>
+              <h4 className="font-bold text-slate-700 mb-1.5">
+                {lang === 'zh' ? '📊 Web 面板' : 'Dashboards'}
+              </h4>
+              <div className="space-y-1">
+                <a href="https://github.com/MetaCubeX/Yacd-meta" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />Yacd-meta — MetaCubeX/Yacd-meta
+                </a>
+                <a href="https://github.com/MetaCubeX/metacubexd" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />metacubexd — MetaCubeX/metacubexd
+                </a>
+                <a href="https://github.com/haishanh/yacd" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />yacd — haishanh/yacd
+                </a>
+                <a href="https://github.com/Zephyruso/zashboard" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />zashboard — Zephyruso/zashboard
+                </a>
+              </div>
+            </div>
+
+            {/* Source */}
+            <div>
+              <h4 className="font-bold text-slate-700 mb-1.5">
+                {lang === 'zh' ? '📦 整合仓库' : 'Repository'}
+              </h4>
+              <a href="https://github.com/enpioodada/sing-box-core" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 hover:underline">
+                <span className="text-[10px] font-mono bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded">enpioodada/sing-box-core</span>
+                <ExternalLink className="w-3 h-3 shrink-0 text-indigo-400" />
+              </a>
+            </div>
+          </div>
+        </div>
+
         {/* Row 1 / Col 1 & 2: Primary Input Card */}
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-sm gap-4">
           <div className="flex justify-between items-center">
@@ -543,17 +811,27 @@ export default function App() {
             </div>
           </div>
 
-          <div className="relative flex-1 min-h-[300px] flex flex-col">
+          <div className="relative flex-1 min-h-[460px] flex flex-col">
             <textarea
               id="raw-node-input"
               value={rawInput}
               onChange={(e) => setRawInput(e.target.value)}
               placeholder={t.nodeInputPlaceholder}
-              className="w-full flex-1 p-4 bg-slate-900 text-slate-200 rounded-xl font-mono text-sm leading-relaxed border border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 overflow-y-auto resize-none min-h-[250px]"
+              className="w-full flex-1 p-4 bg-slate-900 text-slate-200 rounded-xl font-mono text-sm leading-relaxed border border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 overflow-y-auto resize-none min-h-[460px]"
             />
             {rawInput.trim() && (
-              <div className="absolute bottom-3 right-3 flex gap-2">
+              <div className="absolute bottom-3 right-3 flex gap-2 items-center">
                 <button
+                  type="button"
+                  onClick={handleParseToUris}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer text-xs font-bold shadow-sm"
+                  title={lang === 'zh' ? '将输入解析转换为原生节点协议连接格式' : 'Parse input to protocol URI connections'}
+                >
+                  <Cpu className="w-3.5 h-3.5" />
+                  {lang === 'zh' ? '解析' : 'Parse Links'}
+                </button>
+                <button
+                  type="button"
                   onClick={() => {
                     navigator.clipboard.writeText(rawInput);
                     setNotification({ type: 'success', message: t.toastCopiedSuccess });
@@ -633,55 +911,351 @@ export default function App() {
             </div>
           </div>
 
-          {/* Card 2: Platform Support Status */}
+          {/* Card 2: General Settings (通用设置) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col gap-4">
             <div className="flex items-center gap-2">
-              <Shield className="w-5 h-5 text-indigo-500" />
-              <h3 className="text-base font-bold text-slate-800 font-display">{t.targetClientSupportTitle}</h3>
+              <Sliders className="w-5 h-5 text-indigo-500" />
+              <h3 className="text-base font-bold text-slate-800 font-display">
+                {lang === 'zh' ? '通用设置' : 'General Settings'}
+              </h3>
             </div>
             
             <p className="text-xs text-slate-500 leading-relaxed">
-              {t.targetClientSupportDesc}
+              {lang === 'zh' ? '自定义分流分组、自动测试以及 Clash 外部控制面板。' : 'Configure proxy grouping, auto-selection, and Clash controller dashboard settings.'}
             </p>
 
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-lg text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span className="font-semibold text-slate-700">Clash / Mihomo</span>
+            <div className="space-y-4 pt-1">
+              {/* Group By Country Toggle */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-150 rounded-xl">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-slate-700">
+                    {lang === 'zh' ? '🌍 按国家分组' : 'Group by Country'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {lang === 'zh' ? '自动检测国家地区并创建分流组' : 'Auto detect country from node names'}
+                  </span>
                 </div>
-                <span className="text-xs text-slate-400 font-medium">Win / macOS / Linux</span>
+                <button
+                  type="button"
+                  onClick={() => setGroupByCountry(!groupByCountry)}
+                  className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    groupByCountry ? 'bg-indigo-600' : 'bg-slate-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      groupByCountry ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
 
-              <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-lg text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span className="font-semibold text-slate-700">Surge</span>
+              {/* Include Auto-Selection Group Toggle */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-150 rounded-xl">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-slate-700">
+                    {lang === 'zh' ? '⚡ 包含自动选择分组' : 'Include Auto-Selection'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {lang === 'zh' ? '为每个国家或全局添加延迟测试自动选择' : 'Create latency-based URL-test groups'}
+                  </span>
                 </div>
-                <span className="text-xs text-slate-400 font-medium">iOS / macOS</span>
+                <button
+                  type="button"
+                  onClick={() => setIncludeAutoGroup(!includeAutoGroup)}
+                  className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    includeAutoGroup ? 'bg-indigo-600' : 'bg-slate-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      includeAutoGroup ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
 
-              <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-150 rounded-lg text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span className="font-semibold text-slate-700">Quantumult X</span>
+              {/* Tun Mode Toggle */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-150 rounded-xl">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-slate-700">
+                    {t.tunModeLabel}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {t.tunModeDesc}
+                  </span>
                 </div>
-                <span className="text-xs text-slate-400 font-medium">iOS / iPadOS</span>
+                <button
+                  type="button"
+                  id="tun-mode-toggle"
+                  onClick={() => setEnableTun(!enableTun)}
+                  className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    enableTun ? 'bg-indigo-600' : 'bg-slate-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      enableTun ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
 
-              <div className="flex items-center justify-between p-2 bg-indigo-50 border border-indigo-150 rounded-lg text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-indigo-600 animate-ping"></span>
-                  <span className="font-bold text-indigo-900">Sing-Box v1.8+</span>
+              {/* System Proxy / Mixed Mode Toggle */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-150 rounded-xl">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-slate-700">
+                    {t.systemProxyLabel}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {t.systemProxyDesc}
+                  </span>
                 </div>
-                <span className="text-xs text-indigo-600 font-bold bg-indigo-100/50 px-2 py-0.5 rounded">{t.allPlatforms}</span>
+                <button
+                  type="button"
+                  id="system-proxy-toggle"
+                  onClick={() => setEnableMixed(!enableMixed)}
+                  className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    enableMixed ? 'bg-indigo-600' : 'bg-slate-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      enableMixed ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
               </div>
+
+              {/* Mixed Port Input if Enabled */}
+              {enableMixed && (
+                <div className="p-3 bg-slate-50 border border-slate-150 rounded-xl space-y-1.5 animate-fadeIn">
+                  <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                    {t.mixedPortLabel}
+                  </label>
+                  <input
+                    type="text"
+                    id="mixed-port-input"
+                    value={mixedPort}
+                    onChange={(e) => setMixedPort(e.target.value)}
+                    placeholder="2080"
+                    className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              )}
+
+              {/* Enable Clash API Toggle */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-150 rounded-xl">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-slate-700">
+                    {lang === 'zh' ? '🛠️ 启用 Clash API' : 'Enable Clash API'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {lang === 'zh' ? '在 Sing-Box 中提供 Clash 外部控制接口' : 'Expose Clash-compatible external API'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEnableClashApi(!enableClashApi)}
+                  className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    enableClashApi ? 'bg-indigo-600' : 'bg-slate-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      enableClashApi ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {enableClashApi && (
+                <div className="space-y-3.5 border-t border-slate-100 pt-3.5 mt-1.5 animate-fadeIn">
+                  {/* Clash API Port Input */}
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      {lang === 'zh' ? '外部控制端口' : 'External Control Port'}
+                    </label>
+                    <input
+                      type="text"
+                      value={clashApiPort}
+                      onChange={(e) => setClashApiPort(e.target.value)}
+                      placeholder="0.0.0.0:9090"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white"
+                    />
+                  </div>
+
+                  {/* Clash UI Download Link Input / Select */}
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      {lang === 'zh' ? 'Clash UI 下载地址' : 'Clash UI Download URL'}
+                    </label>
+                    <div className="flex flex-col gap-1.5">
+                      <select
+                        value={clashUiUrl}
+                        onChange={(e) => setClashUiUrl(e.target.value)}
+                        className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      >
+                        <option value="https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip">Yacd Dashboard</option>
+                        <option value="https://github.com/metacubex/metacubexd/archive/gh-pages.zip">Mihomo Dashboard (Metacubexd)</option>
+                        <option value="">{lang === 'zh' ? '自定义下载地址' : 'Custom Download URL'}</option>
+                      </select>
+                      {clashUiUrl !== 'https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip' && clashUiUrl !== 'https://github.com/metacubex/metacubexd/archive/gh-pages.zip' && (
+                        <input
+                          type="url"
+                          value={clashUiUrl}
+                          onChange={(e) => setClashUiUrl(e.target.value)}
+                          placeholder="https://example.com/ui.zip"
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white"
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Row 2 / Full-width: Parameters Selection & Stats */}
-        <div className="col-span-1 lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col gap-6">
+        {/* Row 2 / Full: Base Config Template */}
+        <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col gap-4">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2">
+              <BookMarked className="w-5 h-5 text-indigo-500" />
+              <h2 className="text-lg font-bold font-display text-slate-800">
+                {lang === 'zh' ? '基础配置模板' : 'Base Config Template'}
+              </h2>
+              <div className="flex bg-slate-100 p-0.5 rounded-lg ml-2">
+                <button
+                  onClick={() => {
+                    setBaseConfigMode('preset');
+                    setValidationResult(null);
+                  }}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                    baseConfigMode === 'preset'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  {lang === 'zh' ? '预设' : 'Preset'}
+                </button>
+                <button
+                  onClick={() => {
+                    setBaseConfigMode('custom');
+                    setValidationResult(null);
+                  }}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                    baseConfigMode === 'custom'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  {lang === 'zh' ? '自定义' : 'Custom'}
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 bg-slate-50 rounded-lg px-3 py-1.5 border border-slate-200 w-full md:w-96">
+                <Link className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <input
+                  type="url"
+                  value={importUrl}
+                  onChange={(e) => setImportUrl(e.target.value)}
+                  placeholder={lang === 'zh' ? '导入远程配置 URL...' : 'Import config URL...'}
+                  className="flex-1 bg-transparent border-none outline-none text-xs text-slate-600 placeholder-slate-400 min-w-0"
+                />
+                <button
+                  onClick={async () => {
+                    if (!importUrl.trim()) return;
+                    try {
+                      const res = await fetch(`/api/fetch-subscription?url=${encodeURIComponent(importUrl.trim())}`);
+                      if (res.ok) {
+                        const text = await res.text();
+                        setCustomBaseTemplate(text);
+                        setBaseConfigMode('custom');
+                        setValidationResult(null);
+                      }
+                    } catch {}
+                  }}
+                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 px-1.5 cursor-pointer"
+                >
+                  {lang === 'zh' ? '导入' : 'Import'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {baseConfigMode === 'preset' && (
+            <select
+              value={selectedPreset}
+              onChange={(e) => {
+                const key = e.target.value;
+                setSelectedPreset(key);
+                setCustomBaseTemplate(BASE_CONFIG_PRESETS[key]);
+                setValidationResult(null);
+              }}
+              className="w-full md:w-72 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+            >
+              {Object.entries(PRESET_LABELS).map(([key, label]) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+          )}
+
+          <div className="relative flex-1 min-h-[460px] flex flex-col">
+            <textarea
+              value={customBaseTemplate}
+              onChange={(e) => {
+                setCustomBaseTemplate(e.target.value);
+                setBaseConfigMode('custom');
+                setValidationResult(null);
+              }}
+              placeholder={lang === 'zh' ? '在此编辑 Sing-Box 基础配置 JSON...' : 'Edit Sing-Box base config JSON...'}
+              className="w-full flex-1 p-4 bg-slate-900 text-slate-200 rounded-xl font-mono text-xs leading-relaxed border border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 overflow-y-auto resize-none min-h-[460px]"
+              spellCheck={false}
+            />
+            <div className="absolute bottom-3 right-3 flex gap-2">
+              <button
+                onClick={() => {
+                  const result = validateBaseConfig(customBaseTemplate);
+                  setValidationResult(result);
+                }}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer text-xs font-bold shadow-sm"
+              >
+                <Check className="w-3.5 h-3.5" />
+                {lang === 'zh' ? '验证' : 'Validate'}
+              </button>
+            </div>
+          </div>
+
+          {validationResult && (
+            <div className={`p-3 rounded-xl border text-xs ${
+              validationResult.valid
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                : 'bg-amber-50 border-amber-200 text-amber-700'
+            }`}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                {validationResult.valid ? (
+                  <CheckCircle className="w-4 h-4 text-emerald-500" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-amber-500" />
+                )}
+                <span className="font-bold">
+                  {validationResult.valid
+                    ? (lang === 'zh' ? '格式检查通过' : 'Validation passed')
+                    : (lang === 'zh' ? '发现潜在问题' : 'Issues found')}
+                </span>
+              </div>
+              <ul className="space-y-0.5 pl-6 list-disc">
+                {validationResult.messages.map((msg, i) => <li key={i} className="text-xs">{msg}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+
+
+        {/* Row 3 / Full: Parameters Selection & Stats */}
+        <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col gap-6">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-lg font-bold flex items-center gap-2 font-display text-slate-800">
@@ -698,7 +1272,29 @@ export default function App() {
                 onClick={() => {
                   const nodes = parseSubscription(rawInput);
                   setParsedNodes(nodes);
-                  const config = generateSingBoxConfig(nodes, { template, dnsStrategy, rulesets });
+                  const resolvedCdnPrefix = cdnType === 'custom'
+                    ? customCdn.trim()
+                    : (cdnType === 'fastly' ? 'https://fastly.jsdelivr.net'
+                       : cdnType === 'gcore' ? 'https://gcore.jsdelivr.net'
+                       : cdnType === 'cdn' ? 'https://cdn.jsdelivr.net'
+                       : cdnType === 'github' ? 'https://raw.githubusercontent.com'
+                       : 'https://testingcf.jsdelivr.net');
+                  const config = generateSingBoxConfig(nodes, {
+                    template,
+                    dnsStrategy,
+                    rulesets,
+                    groupByCountry,
+                    includeAutoGroup,
+                    enableClashApi,
+                    clashApiPort,
+                    clashUiUrl,
+                    cdnPrefix: resolvedCdnPrefix,
+                    enableTun,
+                    enableMixed,
+                    mixedPort,
+                    customBaseTemplate: isValidJson ? customBaseTemplate : undefined,
+      customRules,
+                  });
                   setSingBoxConfig(config);
                   setNotification({ type: 'success', message: `${t.successfullyExtractedLabel}: ${nodes.length}` });
                 }}
@@ -708,60 +1304,13 @@ export default function App() {
                 {t.localCompileBtn}
               </button>
 
-              {/* Advanced Gemini AI compiler button */}
-              <button
-                onClick={handleAIConversion}
-                disabled={isAiConverting}
-                className="flex-1 md:flex-none px-6 py-2.5 bg-gradient-to-r from-indigo-600 via-indigo-700 to-violet-600 hover:opacity-95 text-white text-sm font-bold rounded-xl shadow-md shadow-indigo-100 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                title="Use Gemini AI to extract nodes from complex or non-standard configurations intelligently"
-              >
-                {isAiConverting ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                    {t.aiConvertingBtn}
-                  </>
-                ) : (
-                  <>
-                    <Cpu className="w-4 h-4 text-cyan-200 animate-pulse" />
-                    {t.aiSmartParseBtn}
-                  </>
-                )}
-              </button>
             </div>
           </div>
 
-          {/* AI conversion errors */}
-          {aiError && (
-            <div className="text-sm font-semibold text-rose-600 bg-rose-50 border border-rose-100 p-3.5 rounded-xl flex items-start gap-2.5">
-              <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-500" />
-              <div>
-                <p className="font-bold">{t.aiErrorTitle}</p>
-                <p className="text-xs text-rose-500 font-medium mt-1">{aiError}</p>
-              </div>
-            </div>
-          )}
-
           {/* Param Settings Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
             
-            {/* Setting 1: Schema Template */}
-            <div className="space-y-1.5">
-              <label htmlFor="template-select" className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-                {t.schemaTemplateLabel}
-              </label>
-              <select
-                id="template-select"
-                value={template}
-                onChange={(e) => setTemplate(e.target.value as any)}
-                className="w-full p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-sm text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-              >
-                <option value="singbox-latest">Sing-Box Latest (Default)</option>
-                <option value="singbox-v1.8">Sing-Box v1.8+</option>
-                <option value="clash-meta">Clash Meta Profile</option>
-              </select>
-            </div>
-
-            {/* Setting 2: DNS routing mode */}
+            {/* Setting 1: DNS routing mode */}
             <div className="space-y-1.5">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
                 {t.dnsStrategyLabel}
@@ -792,38 +1341,42 @@ export default function App() {
               </div>
             </div>
 
-            {/* Setting 3: Standard Rulesets */}
+            {/* Setting 2: CDN Acceleration Prefix */}
             <div className="space-y-1.5">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-                {t.preconfiguredRulesetsLabel}
+                {t.cdnPrefixLabel}
               </span>
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => handleToggleRuleset('AD-Block')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
-                    rulesets.includes('AD-Block')
-                      ? 'bg-indigo-50 border-indigo-200 text-indigo-600'
-                      : 'bg-slate-50 border-slate-200 text-slate-400'
-                  }`}
-                >
-                  {t.blockAdsLabel}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleToggleRuleset('GeoIP:CN')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
-                    rulesets.includes('GeoIP:CN')
-                      ? 'bg-indigo-50 border-indigo-200 text-indigo-600'
-                      : 'bg-slate-50 border-slate-200 text-slate-400'
-                  }`}
-                >
-                  {t.chinaBypassLabel}
-                </button>
-              </div>
+              <select
+                id="cdn-select"
+                value={cdnType}
+                onChange={(e) => {
+                  setCdnType(e.target.value);
+                  if (e.target.value !== 'custom') {
+                    setCustomCdn('');
+                  }
+                }}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+              >
+                <option value="testingcf">{t.cdnTypeTestingcf}</option>
+                <option value="fastly">{t.cdnTypeFastly}</option>
+                <option value="gcore">{t.cdnTypeGcore}</option>
+                <option value="cdn">{t.cdnTypeMain}</option>
+                <option value="github">{t.cdnTypeDirect}</option>
+                <option value="custom">{t.cdnTypeCustom}</option>
+              </select>
+              {cdnType === 'custom' && (
+                <input
+                  id="cdn-custom-input"
+                  type="text"
+                  value={customCdn}
+                  onChange={(e) => setCustomCdn(e.target.value)}
+                  placeholder={t.customCdnPlaceholder}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              )}
             </div>
 
-            {/* Status 4: Parsed Nodes Counters */}
+            {/* Status: Parsed Nodes Counters */}
             <div className="bg-indigo-50/50 rounded-2xl border border-indigo-100 p-4 flex flex-col justify-between">
               <div className="text-xs font-bold text-indigo-500 uppercase tracking-wider">
                 {t.successfullyExtractedLabel}
@@ -850,10 +1403,144 @@ export default function App() {
               </div>
             </div>
 
+            {/* Setting 3: Standard Rulesets */}
+            <div className="space-y-3 md:col-span-3 border-t border-slate-100 pt-5 mt-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                {t.preconfiguredRulesetsLabel}
+              </span>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                {[
+                  { id: 'AD-Block', label: t.blockAdsLabel },
+                  { id: 'AI-Services', label: t.openaiLabel },
+                  { id: 'Bilibili', label: t.bilibiliLabel },
+                  { id: 'YouTube', label: t.youtubeLabel },
+                  { id: 'Google', label: t.googleLabel },
+                  { id: 'Private-Net', label: t.privateNetLabel },
+                  { id: 'China-Services', label: t.chinaBypassLabel },
+                  { id: 'Telegram', label: t.telegramLabel },
+                  { id: 'GitHub', label: t.githubLabel },
+                  { id: 'Microsoft', label: t.microsoftLabel },
+                  { id: 'Apple', label: t.appleLabel },
+                  { id: 'Social-Media', label: t.socialMediaLabel },
+                  { id: 'Streaming', label: t.streamingLabel },
+                  { id: 'Gaming', label: t.gamingLabel },
+                  { id: 'Education', label: t.educationLabel },
+                  { id: 'Finance', label: t.financeLabel },
+                  { id: 'Cloud-Services', label: t.cloudServicesLabel },
+                  { id: 'Spotify', label: t.spotifyLabel },
+                  { id: 'TikTok', label: t.tiktokLabel },
+                  { id: 'HuggingFace', label: t.huggingfaceLabel },
+                  { id: 'Proxy-Services', label: t.proxyServicesLabel },
+                  { id: 'Proxy-Media', label: t.proxyMediaLabel },
+                  { id: 'EHentai', label: t.eHentaiLabel },
+                  { id: 'Global-Services', label: t.globalServicesLabel }
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleToggleRuleset(item.id)}
+                    className={`px-3 py-2 text-xs font-semibold rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer select-none ${
+                      rulesets.includes(item.id)
+                        ? 'bg-indigo-50 border-indigo-200 text-indigo-600 shadow-sm shadow-indigo-50/50'
+                        : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <span className="truncate">{item.label}</span>
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ml-1.5 ${
+                      rulesets.includes(item.id) ? 'bg-indigo-600 animate-pulse' : 'bg-transparent'
+                    }`} />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Rules */}
+            <div className="md:col-span-3 border-t border-slate-100 pt-4 mt-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider w-[90px] shrink-0">
+                  {lang === 'zh' ? '分流规则' : 'Rules'}
+                </span>
+                <select
+                  value={newRuleType}
+                  onChange={(e) => setNewRuleType(e.target.value as typeof newRuleType)}
+                  className="w-[85px] shrink-0 px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="domain">{lang === 'zh' ? '域名' : 'Domain'}</option>
+                  <option value="ip">IP CIDR</option>
+                  <option value="rule_set">Rule-Set URL</option>
+                </select>
+                <input
+                  type="text"
+                  value={newRuleValue}
+                  onChange={(e) => setNewRuleValue(e.target.value)}
+                  placeholder={
+                    newRuleType === 'domain' ? 'example.com' :
+                    newRuleType === 'ip' ? '1.2.3.4/24' :
+                    'https://example.com/rule.srs'
+                  }
+                  className="flex-[20] min-w-0 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <select
+                  value={newRuleOutbound}
+                  onChange={(e) => setNewRuleOutbound(e.target.value as typeof newRuleOutbound)}
+                  className="w-[85px] shrink-0 px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="proxy">Proxy</option>
+                  <option value="direct">Direct</option>
+                  <option value="block">Block</option>
+                </select>
+                <button
+                  onClick={() => {
+                    if (!newRuleValue.trim()) return;
+                    setCustomRules([...customRules, {
+                      type: newRuleType,
+                      value: newRuleValue.trim(),
+                      outbound: newRuleOutbound,
+                    }]);
+                    setNewRuleValue('');
+                  }}
+                  className="shrink-0 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-sm"
+                >
+                  + {lang === 'zh' ? '添加' : 'Add'}
+                </button>
+                <span className="text-[10px] text-slate-400 w-[50px] text-right shrink-0">
+                  {customRules.length}{lang === 'zh' ? '条' : 'r'}
+                </span>
+              </div>
+              {customRules.length > 0 && (
+                <div className="space-y-1 max-h-[180px] overflow-y-auto">
+                  {customRules.map((rule, i) => (
+                    <div key={i} className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+                      <span className={`px-1.5 py-0.5 rounded font-bold ${
+                        rule.type === 'domain' ? 'bg-cyan-50 text-cyan-600' :
+                        rule.type === 'ip' ? 'bg-amber-50 text-amber-600' :
+                        'bg-fuchsia-50 text-fuchsia-600'
+                      }`}>
+                        {rule.type === 'domain' ? 'DOMAIN' : rule.type === 'ip' ? 'IP' : 'RULE_SET'}
+                      </span>
+                      <code className="flex-1 text-slate-700 truncate font-mono">{rule.value}</code>
+                      <span className={`font-bold ${
+                        rule.outbound === 'proxy' ? 'text-indigo-600' :
+                        rule.outbound === 'direct' ? 'text-emerald-600' : 'text-rose-600'
+                      }`}>
+                        → {rule.outbound.toUpperCase()}
+                      </span>
+                      <button
+                        onClick={() => setCustomRules(customRules.filter((_, j) => j !== i))}
+                        className="text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
+                      >
+                        <span className="text-xs font-bold">✕</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
           </div>
         </div>
 
-        {/* Row 3 / Col 1 to 3: Compilation output box */}
+        {/* Row 4 / Col 1 to 3: Compilation output box */}
         <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col gap-4">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 pb-3">
             
@@ -918,11 +1605,21 @@ export default function App() {
                   </button>
 
                   <button
-                    onClick={() => setIsSubModalOpen(true)}
+                    onClick={handleCopySubLink}
                     className="p-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer text-xs font-bold shadow-sm shadow-emerald-100"
+                    title={lang === 'zh' ? '复制转换好以后的订阅链接' : 'Copy converted subscription link'}
                   >
-                    <QrCode className="w-4 h-4" />
-                    {t.subUrlBtn}
+                    {copySubFeedback ? (
+                      <>
+                        <Check className="w-4 h-4 text-emerald-200" />
+                        {t.copiedLabel}
+                      </>
+                    ) : (
+                      <>
+                        <Link className="w-4 h-4" />
+                        {t.subModalCopyBtn}
+                      </>
+                    )}
                   </button>
                 </>
               )}
@@ -932,7 +1629,7 @@ export default function App() {
           {/* Tab Content 1: Code Output Block */}
           {activeTab === 'preview' && (
             <div className="relative">
-              <pre className="bg-slate-900 text-slate-200 p-5 rounded-xl font-mono text-xs overflow-x-auto max-h-[500px] leading-relaxed border border-slate-800">
+              <pre className="bg-slate-900 text-slate-200 p-5 rounded-xl font-mono text-xs overflow-x-auto min-h-[460px] max-h-[520px] leading-relaxed border border-slate-800">
                 <code>{singBoxConfig || t.noNodesMatchedPreview}</code>
               </pre>
             </div>
@@ -1019,68 +1716,6 @@ export default function App() {
           <span>{t.uptime}</span>
         </div>
       </footer>
-
-      {/* Subscription Link & QR Code Modal */}
-      {isSubModalOpen && (
-        <div id="sub-qr-modal" className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 relative flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex justify-between items-start">
-              <h3 className="text-lg font-bold font-display text-slate-800 flex items-center gap-2">
-                <QrCode className="w-5 h-5 text-emerald-600" />
-                {t.subModalTitle}
-              </h3>
-              <button
-                onClick={() => setIsSubModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 p-1.5 rounded-lg transition-colors cursor-pointer"
-              >
-                <span className="text-xl leading-none">×</span>
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500 leading-relaxed">
-              {t.subModalDesc}
-            </p>
-
-            <div className="flex items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-150">
-              <input
-                type="text"
-                readOnly
-                value={getSubLinkUrl()}
-                className="bg-transparent text-xs font-mono text-slate-600 flex-1 outline-none select-all"
-              />
-              <button
-                onClick={handleCopySubLink}
-                className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg transition-colors border border-emerald-150 flex items-center gap-1 cursor-pointer text-xs font-bold"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                {t.copyCodeBtn}
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500 leading-relaxed text-center">
-              {t.subModalExplain}
-            </p>
-
-            <div className="flex flex-col items-center justify-center bg-slate-50 p-4 rounded-xl border border-slate-150 self-center">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(getSubLinkUrl())}`}
-                alt="Subscription Link QR Code"
-                referrerPolicy="no-referrer"
-                className="w-44 h-44 bg-white p-2 rounded-lg border border-slate-200"
-              />
-            </div>
-
-            <div className="flex justify-end mt-2">
-              <button
-                onClick={() => setIsSubModalOpen(false)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
-              >
-                {t.subModalCloseBtn}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
     </div>
   );
