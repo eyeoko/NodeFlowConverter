@@ -1401,13 +1401,29 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     }
   }
 
-  // Add experimental Clash API block if enabled
+  // Add service API (Sing-Box 1.14+) and Clash API for compatibility
   if (options.enableClashApi) {
+    const apiPort = options.clashApiPort || '127.0.0.1:9090';
+    // New sing-box API service (gRPC + dashboard) — required by SFM 1.14+ GUI
+    finalConfig.services = finalConfig.services || [];
+    const hasApiService = finalConfig.services.some((s: any) => s.type === 'api');
+    if (!hasApiService) {
+      finalConfig.services.push({
+        type: 'api',
+        listen: apiPort,
+        access_control_allow_origin: ['*'],
+        access_control_allow_private_network: true,
+        dashboard: {
+          enabled: true,
+          download_url: options.clashUiUrl || 'https://github.com/SagerNet/sing-box-dashboard/archive/refs/heads/gh-pages.zip',
+          update_interval: '24h'
+        }
+      });
+    }
+    // Legacy Clash API (REST) — for third-party UIs (yacd/metacubexd) via CLI usage
     finalConfig.experimental = finalConfig.experimental || {};
     finalConfig.experimental.clash_api = finalConfig.experimental.clash_api || {
-      external_controller: options.clashApiPort || '0.0.0.0:9090',
-      external_ui: 'yacd',
-      external_ui_download_url: options.clashUiUrl || 'https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip',
+      external_controller: apiPort,
       default_mode: 'rule'
     };
   }
