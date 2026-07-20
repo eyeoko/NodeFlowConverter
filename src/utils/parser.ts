@@ -771,7 +771,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       }
     );
 
-    if (options.rulesets.includes('GeoIP:CN')) {
+    if (options.rulesets.includes('China-Services') || options.rulesets.includes('GeoIP:CN')) {
       dnsRules.unshift({
         rule_set: 'geosite-cn',
         server: 'dns_direct',
