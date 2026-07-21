@@ -27,6 +27,9 @@ export async function onRequest(context: EventContext<unknown, never, Record<str
       enableClashApi,
       clashApiPort,
       clashUiUrl,
+      enableTun,
+      enableMixed,
+      mixedPort,
     } = Object.fromEntries(url.searchParams.entries());
 
     if (!config) {
@@ -45,6 +48,9 @@ export async function onRequest(context: EventContext<unknown, never, Record<str
       enableClashApi: enableClashApi === 'true',
       clashApiPort: clashApiPort ?? '0.0.0.0:9090',
       clashUiUrl: clashUiUrl ?? '',
+      enableTun: enableTun !== 'false',
+      enableMixed: enableMixed !== 'false',
+      mixedPort: mixedPort ?? '2080',
     });
 
     return new Response(singBoxConfig, {

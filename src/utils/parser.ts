@@ -432,7 +432,7 @@ export function parseClashYaml(yamlText: string): ProxyNode[] {
 // Converts a list of ProxyNodes into a complete Sing-Box Config
 export interface ConversionOptions {
   template: 'singbox-latest' | 'singbox-v1.8' | 'clash-meta';
-  dnsStrategy: 'system' | 'fakeip' | 'custom';
+  dnsStrategy: 'system' | 'fakeip';
   rulesets: string[];
   groupByCountry?: boolean;
   includeAutoGroup?: boolean;

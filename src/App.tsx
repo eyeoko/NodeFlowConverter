@@ -376,7 +376,7 @@ export default function App() {
 
   // Parameters
   const template = 'singbox-latest';
-  const [dnsStrategy, setDnsStrategy] = useState<'system' | 'fakeip' | 'custom'>('system');
+  const [dnsStrategy, setDnsStrategy] = useState<'system' | 'fakeip'>('system');
   const [rulesets, setRulesets] = useState<string[]>(['AD-Block', 'China-Services', 'Private-Net']);
 
   // General & Clash API parameters
