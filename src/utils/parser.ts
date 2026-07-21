@@ -1402,14 +1402,13 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   }
 
   // ── Clash API (REST, for web dashboard) ──
-  // Only one API server; avoid port conflicts by not adding services[] here.
+  // Avoid download URL/detour that can block startup when GitHub is unreachable.
+  // The UI will still work if dashboard files exist locally (e.g. pre-downloaded).
   if (options.enableClashApi) {
     finalConfig.experimental = finalConfig.experimental || {};
+    finalConfig.experimental.cache_file = { enabled: true };
     finalConfig.experimental.clash_api = {
       external_controller: options.clashApiPort || '127.0.0.1:9090',
-      external_ui: 'dashboard',
-      external_ui_download_url: 'https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip',
-      external_ui_download_detour: 'direct',
       default_mode: 'rule',
     };
   }
