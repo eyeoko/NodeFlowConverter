@@ -730,6 +730,10 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         type: 'udp',
         tag: 'dns_direct',
         server: '223.5.5.5',
+      },
+      {
+        type: 'fakeip',
+        tag: 'dns_fakeip',
       }
     );
     // Node server domains must resolve via real DNS (not fakeip) so proxies can connect
@@ -743,7 +747,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     dnsRules.push(
       {
         query_type: ['A', 'AAAA'],
-        action: 'fakeip',
+        server: 'dns_fakeip',
       }
     );
   } else {
@@ -1293,6 +1297,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       address: ['172.19.0.1/30'],
       auto_route: true,
       strict_route: true,
+      sniff: true,
     });
   }
   if (options.enableMixed !== false) {
@@ -1324,6 +1329,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   finalConfig.dns = {
     servers: [...dnsServers],
     rules: [...dnsRules],
+    final: 'dns_direct',
     strategy: 'ipv4_only',
   };
   if (options.dnsStrategy === 'fakeip') {
@@ -1370,8 +1376,8 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   // Our routing rules first (higher priority), then template rules
   finalConfig.route = {
     rules: [...routingRules],
-    auto_detect_interface: true,
     final: 'proxy',
+    auto_detect_interface: true,
     default_domain_resolver: 'dns_direct',
   };
   if (baseConfig.route) {
