@@ -1304,132 +1304,156 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     });
   }
 
-  let finalConfig: any = {};
+  let baseConfig: any = {};
   if (options.customBaseTemplate) {
     try {
-      finalConfig = JSON.parse(options.customBaseTemplate);
+      baseConfig = JSON.parse(options.customBaseTemplate);
     } catch (e) {
       // Fallback to empty if invalid
     }
   }
 
-  // Ensure log structure is present
-  finalConfig.log = finalConfig.log || {
-    level: 'info',
-    timestamp: true,
+  // Start with our generated config, then merge user template on top properly
+  let finalConfig: any = {};
+
+  // ── log ──
+  finalConfig.log = baseConfig.log || { level: 'info', timestamp: true };
+
+  // ── dns ──
+  // Our DNS config is authoritative; template DNS only adds extra servers/rules
+  finalConfig.dns = {
+    servers: [...dnsServers],
+    rules: [...dnsRules],
+    strategy: 'ipv4_only',
   };
-
-  // Ensure dns structure is present
-  if (!finalConfig.dns) {
-    finalConfig.dns = {
-      servers: dnsServers,
-      rules: dnsRules,
-      strategy: 'ipv4_only',
-    };
-  } else {
-    // Append or default
-    finalConfig.dns.servers = finalConfig.dns.servers || dnsServers;
-    finalConfig.dns.rules = [
-      ...(finalConfig.dns.rules || []),
-      ...dnsRules
-    ];
-    finalConfig.dns.strategy = finalConfig.dns.strategy || 'ipv4_only';
-  }
-
-  // Add fakeip settings if active
   if (options.dnsStrategy === 'fakeip') {
-    finalConfig.dns.fakeip = finalConfig.dns.fakeip || {
-      enabled: true,
-      inet4_range: '198.18.0.0/15',
-    };
+    finalConfig.dns.fakeip = { enabled: true, inet4_range: '198.18.0.0/15' };
+  }
+  if (baseConfig.dns) {
+    // Append template servers that don't conflict with our tags
+    const ourDnsTags = new Set(dnsServers.map((s: any) => s.tag));
+    for (const s of (baseConfig.dns.servers || [])) {
+      if (!ourDnsTags.has(s.tag)) {
+        finalConfig.dns.servers.push(s);
+      }
+    }
+    // Append template DNS rules (after ours, so ours take priority)
+    for (const r of (baseConfig.dns.rules || [])) {
+      finalConfig.dns.rules.push(r);
+    }
   }
 
-  // Handle inbounds
-  if (!finalConfig.inbounds || finalConfig.inbounds.length === 0) {
-    finalConfig.inbounds = configInbounds;
-  } else {
-    const existingTypes = new Set(finalConfig.inbounds.map((ib: any) => ib.type));
-    for (const ib of configInbounds) {
-      if (!existingTypes.has(ib.type)) {
+  // ── inbounds ──
+  finalConfig.inbounds = [...configInbounds];
+  if (baseConfig.inbounds) {
+    const ourInboundTypes = new Set(configInbounds.map((ib: any) => ib.type));
+    for (const ib of baseConfig.inbounds) {
+      if (!ourInboundTypes.has(ib.type)) {
         finalConfig.inbounds.push(ib);
       }
     }
   }
 
-  // Handle outbounds
-  if (!finalConfig.outbounds) {
-    finalConfig.outbounds = outbounds;
-  } else {
-    // Append generated outbounds avoiding duplicates
-    const baseOutboundTags = new Set(finalConfig.outbounds.map((ob: any) => ob.tag));
-    for (const ob of outbounds) {
-      if (!baseOutboundTags.has(ob.tag)) {
+  // ── outbounds ──
+  // Generated outbounds first, then template outbounds (non-duplicate)
+  finalConfig.outbounds = [...outbounds];
+  if (baseConfig.outbounds) {
+    const ourTags = new Set(outbounds.map((ob: any) => ob.tag));
+    for (const ob of baseConfig.outbounds) {
+      if (!ourTags.has(ob.tag)) {
         finalConfig.outbounds.push(ob);
       }
     }
   }
 
-  // Handle route
-  if (!finalConfig.route) {
-    finalConfig.route = {
-      rules: routingRules,
-      auto_detect_interface: true,
-      final: 'proxy',
-      default_domain_resolver: 'dns_direct',
-    };
-  } else {
-    finalConfig.route.auto_detect_interface = finalConfig.route.auto_detect_interface !== undefined 
-      ? finalConfig.route.auto_detect_interface 
-      : true;
-    finalConfig.route.final = finalConfig.route.final || 'proxy';
-    finalConfig.route.default_domain_resolver = finalConfig.route.default_domain_resolver || 'dns_direct';
-    finalConfig.route.rules = [
-      ...(finalConfig.route.rules || []),
-      ...routingRules
-    ];
+  // ── route ──
+  // Our routing rules first (higher priority), then template rules
+  finalConfig.route = {
+    rules: [...routingRules],
+    auto_detect_interface: true,
+    final: 'proxy',
+    default_domain_resolver: 'dns_direct',
+  };
+  if (baseConfig.route) {
+    if (baseConfig.route.auto_detect_interface !== undefined) {
+      finalConfig.route.auto_detect_interface = baseConfig.route.auto_detect_interface;
+    }
+    if (baseConfig.route.final) {
+      finalConfig.route.final = baseConfig.route.final;
+    }
+    if (baseConfig.route.default_domain_resolver) {
+      finalConfig.route.default_domain_resolver = baseConfig.route.default_domain_resolver;
+    }
+    // Template rules appended after ours (lower priority)
+    for (const r of (baseConfig.route.rules || [])) {
+      finalConfig.route.rules.push(r);
+    }
   }
 
-  // Add modern rule_sets if we have defined them
-  if (routeRuleSets.length > 0) {
-    finalConfig.route.rule_set = finalConfig.route.rule_set || [];
-    const seenTags = new Set<string>(finalConfig.route.rule_set.map((rs: any) => rs.tag));
-    for (const rs of routeRuleSets) {
-      if (!seenTags.has(rs.tag)) {
-        seenTags.add(rs.tag);
+  // ── route.rule_set ──
+  finalConfig.route.rule_set = [...routeRuleSets];
+  if (baseConfig.route && baseConfig.route.rule_set) {
+    const ourRuleSetTags = new Set(routeRuleSets.map((rs: any) => rs.tag));
+    for (const rs of baseConfig.route.rule_set) {
+      if (!ourRuleSetTags.has(rs.tag)) {
         finalConfig.route.rule_set.push(rs);
       }
     }
   }
 
-  // Add service API (Sing-Box 1.14+) and Clash API for compatibility
+  // ── services (Sing-Box 1.14+ API service) ──
   if (options.enableClashApi) {
     const rawAddr = options.clashApiPort || '127.0.0.1:9090';
     const colonIdx = rawAddr.lastIndexOf(':');
     const listenIp = colonIdx > 0 ? rawAddr.slice(0, colonIdx) : '127.0.0.1';
     const listenPort = colonIdx > 0 ? parseInt(rawAddr.slice(colonIdx + 1), 10) : parseInt(rawAddr, 10);
-    // New sing-box API service (gRPC + dashboard) — required by SFM 1.14+ GUI
-    finalConfig.services = finalConfig.services || [];
-    const hasApiService = finalConfig.services.some((s: any) => s.type === 'api');
-    if (!hasApiService) {
-      finalConfig.services.push({
-        type: 'api',
-        listen: listenIp,
-        listen_port: listenPort,
-        access_control_allow_origin: ['*'],
-        access_control_allow_private_network: true,
-        dashboard: {
-          enabled: true,
-          download_url: options.clashUiUrl || 'https://github.com/SagerNet/sing-box-dashboard/archive/refs/heads/gh-pages.zip',
-          update_interval: '24h'
-        }
-      });
-    }
-    // Legacy Clash API (REST) — for third-party UIs (yacd/metacubexd) via CLI usage
-    finalConfig.experimental = finalConfig.experimental || {};
-    finalConfig.experimental.clash_api = finalConfig.experimental.clash_api || {
-      external_controller: rawAddr,
-      default_mode: 'rule'
+
+    // Service API – always use official sing-box-dashboard (Yacd is Clash REST, not gRPC)
+    finalConfig.services = [];
+    const apiService: any = {
+      type: 'api',
+      listen: listenIp,
+      listen_port: listenPort,
+      access_control_allow_origin: ['*'],
+      access_control_allow_private_network: true,
+      dashboard: {
+        enabled: true,
+        download_url: 'https://github.com/SagerNet/sing-box-dashboard/archive/refs/heads/gh-pages.zip',
+        update_interval: '24h',
+      },
     };
+    finalConfig.services.push(apiService);
+
+    // Append any template services (avoiding duplicate api)
+    if (baseConfig.services) {
+      for (const s of baseConfig.services) {
+        if (s.type !== 'api') {
+          finalConfig.services.push(s);
+        }
+      }
+    }
+
+    // Legacy Clash API (REST) – for CLI / third-party UIs
+    finalConfig.experimental = finalConfig.experimental || {};
+    finalConfig.experimental.clash_api = {
+      external_controller: rawAddr,
+      default_mode: 'rule',
+    };
+  } else if (baseConfig.services) {
+    // Pass through template services when API is disabled
+    finalConfig.services = [...baseConfig.services];
+  }
+
+  // ── experimental (pass-through from template, e.g. cache_file) ──
+  if (baseConfig.experimental) {
+    if (!finalConfig.experimental) {
+      finalConfig.experimental = {};
+    }
+    for (const key of Object.keys(baseConfig.experimental)) {
+      if (key !== 'clash_api') {
+        finalConfig.experimental[key] = baseConfig.experimental[key];
+      }
+    }
   }
 
   return JSON.stringify(finalConfig, null, 2);
