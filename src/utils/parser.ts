@@ -1401,50 +1401,22 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     }
   }
 
-  // ── services (Sing-Box 1.14+ API service) ──
+  // ── Clash API (REST, for web dashboard) ──
+  // Only one API server; avoid port conflicts by not adding services[] here.
   if (options.enableClashApi) {
-    const rawAddr = options.clashApiPort || '127.0.0.1:9090';
-    const colonIdx = rawAddr.lastIndexOf(':');
-    const listenIp = colonIdx > 0 ? rawAddr.slice(0, colonIdx) : '127.0.0.1';
-    const listenPort = colonIdx > 0 ? parseInt(rawAddr.slice(colonIdx + 1), 10) : parseInt(rawAddr, 10);
-
-    // Service API – always use official sing-box-dashboard (Yacd is Clash REST, not gRPC)
-    finalConfig.services = [];
-    const apiService: any = {
-      type: 'api',
-      listen: listenIp,
-      listen_port: listenPort,
-      access_control_allow_origin: ['*'],
-      access_control_allow_private_network: true,
-      dashboard: {
-        enabled: true,
-        download_url: 'https://github.com/SagerNet/sing-box-dashboard/archive/refs/heads/gh-pages.zip',
-        update_interval: '24h',
-      },
-    };
-    finalConfig.services.push(apiService);
-
-    // Append any template services (avoiding duplicate api)
-    if (baseConfig.services) {
-      for (const s of baseConfig.services) {
-        if (s.type !== 'api') {
-          finalConfig.services.push(s);
-        }
-      }
-    }
-
-    // Legacy Clash API (REST) – for CLI / third-party UIs
     finalConfig.experimental = finalConfig.experimental || {};
     finalConfig.experimental.clash_api = {
-      external_controller: rawAddr,
+      external_controller: options.clashApiPort || '127.0.0.1:9090',
+      external_ui: 'dashboard',
+      external_ui_download_url: 'https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip',
+      external_ui_download_detour: 'direct',
       default_mode: 'rule',
     };
-  } else if (baseConfig.services) {
-    // Pass through template services when API is disabled
+  }
+  // Pass-through template services / experimental (cache_file, etc.)
+  if (baseConfig.services) {
     finalConfig.services = [...baseConfig.services];
   }
-
-  // ── experimental (pass-through from template, e.g. cache_file) ──
   if (baseConfig.experimental) {
     if (!finalConfig.experimental) {
       finalConfig.experimental = {};
