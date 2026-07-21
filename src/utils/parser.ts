@@ -1297,7 +1297,6 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       address: ['172.19.0.1/30'],
       auto_route: true,
       strict_route: true,
-      sniff: true,
     });
   }
   if (options.enableMixed !== false) {
