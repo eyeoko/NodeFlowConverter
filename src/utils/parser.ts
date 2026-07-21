@@ -19,6 +19,10 @@ export interface ProxyNode {
   udp?: boolean;
   auth?: string;
   alpn?: string[];
+  flow?: string;
+  publicKey?: string;
+  shortId?: string;
+  fingerprint?: string;
   raw: string;
 }
 
@@ -149,6 +153,10 @@ function parseVless(urlStr: string): ProxyNode | null {
     const security = params.get('security');
     const tls = security === 'tls' || security === 'reality' || !!params.get('sni');
     const sni = params.get('sni') || '';
+    const flow = params.get('flow') || '';
+    const publicKey = params.get('pbk') || params.get('publicKey') || '';
+    const shortId = params.get('sid') || params.get('shortId') || '';
+    const fingerprint = params.get('fp') || params.get('fingerprint') || '';
 
     return {
       type: 'vless',
@@ -161,6 +169,10 @@ function parseVless(urlStr: string): ProxyNode | null {
       host,
       tls,
       sni,
+      flow,
+      publicKey,
+      shortId,
+      fingerprint,
       raw: urlStr,
     };
   } catch (e) {
@@ -664,6 +676,23 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         ob.tls = {
           enabled: true,
           server_name: node.sni || node.host || node.server,
+        };
+      }
+      if (node.flow) {
+        ob.flow = node.flow;
+      }
+      if (node.publicKey) {
+        ob.tls = ob.tls || { enabled: true };
+        ob.tls.reality = {
+          enabled: true,
+          public_key: node.publicKey,
+          short_id: node.shortId || '',
+        };
+      }
+      if (node.fingerprint && ob.tls) {
+        ob.tls.utls = {
+          enabled: true,
+          fingerprint: node.fingerprint,
         };
       }
     } else if (node.type === 'trojan') {
