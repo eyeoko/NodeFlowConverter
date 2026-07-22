@@ -23,7 +23,7 @@ import {
   Link,
   BookMarked,
 } from 'lucide-react';
-import { parseSubscription, generateSingBoxConfig, ProxyNode, serializeNodeToUri } from './utils/parser';
+import { parseSubscription, generateSingBoxConfig, ProxyNode, serializeNodeToUri, Platform } from './utils/parser';
 import minimalPreset from '../presets/minimal.json';
 import standardPreset from '../presets/standard.json';
 import fullPreset from '../presets/full.json';
@@ -241,6 +241,12 @@ const LOCALES = {
     cdnTypeDirect: "GitHub (直连 - 无 CDN)",
     cdnTypeCustom: "自定义 CDN 前缀...",
     customCdnPlaceholder: "例如 https://raw.githubusercontent.com 或您的自建反代...",
+    platformLabel: "目标平台",
+    platformMacos: "macOS",
+    platformWindows: "Windows",
+    platformLinux: "Linux",
+    platformVps: "VPS 服务器",
+    platformRouter: "路由器 (OpenWRT)",
     tunModeLabel: "🌐 启用 TUN 网卡模式",
     tunModeDesc: "创建虚拟网卡接管系统全局流量，适合整机系统级代理",
     systemProxyLabel: "🔌 启用 Mixed 端口 (系统代理)",
@@ -351,6 +357,12 @@ const LOCALES = {
     cdnTypeDirect: "GitHub (Direct - No CDN)",
     cdnTypeCustom: "Custom CDN Prefix...",
     customCdnPlaceholder: "e.g., https://raw.githubusercontent.com or your custom reverse proxy...",
+    platformLabel: "Target Platform",
+    platformMacos: "macOS",
+    platformWindows: "Windows",
+    platformLinux: "Linux",
+    platformVps: "VPS Server",
+    platformRouter: "Router (OpenWRT)",
     tunModeLabel: "🌐 Enable TUN Interface Mode",
     tunModeDesc: "Create virtual network card to route all system traffic",
     systemProxyLabel: "🔌 Enable Mixed Port (System Proxy)",
@@ -379,7 +391,8 @@ export default function App() {
   const [dnsStrategy, setDnsStrategy] = useState<'system' | 'fakeip'>('system');
   const [rulesets, setRulesets] = useState<string[]>(['AD-Block', 'China-Services', 'Private-Net']);
 
-  // General & Clash API parameters
+  // Platform & General parameters
+  const [platform, setPlatform] = useState<Platform>('macos');
   const [groupByCountry, setGroupByCountry] = useState<boolean>(true);
   const [includeAutoGroup, setIncludeAutoGroup] = useState<boolean>(true);
   const [enableClashApi, setEnableClashApi] = useState<boolean>(true);
@@ -454,6 +467,7 @@ export default function App() {
       template,
       dnsStrategy,
       rulesets,
+      platform,
       groupByCountry,
       includeAutoGroup,
       enableClashApi,
@@ -469,7 +483,7 @@ export default function App() {
     setSingBoxConfig(generated);
     setEditableConfig(generated);
     setValidationMsg(null);
-  }, [rawInput, template, dnsStrategy, rulesets, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customBaseTemplate, isValidJson, customRules]);
+  }, [rawInput, template, dnsStrategy, rulesets, platform, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customBaseTemplate, isValidJson, customRules]);
 
   // Handle auto-closing notifications
   useEffect(() => {
@@ -552,7 +566,7 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `singbox-latest.json`;
+      a.download = `singbox-${platform}-latest.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -944,6 +958,24 @@ export default function App() {
             </p>
 
             <div className="space-y-4 pt-1">
+              {/* Platform Selector */}
+              <div className="p-3 bg-slate-50 border border-slate-150 rounded-xl space-y-1.5">
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                  {t.platformLabel}
+                </label>
+                <select
+                  value={platform}
+                  onChange={(e) => setPlatform(e.target.value as Platform)}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="macos">{t.platformMacos}</option>
+                  <option value="windows">{t.platformWindows}</option>
+                  <option value="linux">{t.platformLinux}</option>
+                  <option value="vps">{t.platformVps}</option>
+                  <option value="router">{t.platformRouter}</option>
+                </select>
+              </div>
+
               {/* Group By Country Toggle */}
               <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-150 rounded-xl">
                 <div className="flex flex-col gap-0.5">
@@ -1306,6 +1338,7 @@ export default function App() {
                     template,
                     dnsStrategy,
                     rulesets,
+                    platform,
                     groupByCountry,
                     includeAutoGroup,
                     enableClashApi,
@@ -1316,7 +1349,7 @@ export default function App() {
                     enableMixed,
                     mixedPort,
                     customBaseTemplate: isValidJson ? customBaseTemplate : undefined,
-      customRules,
+                    customRules,
                   });
                   setSingBoxConfig(config);
                   setNotification({ type: 'success', message: `${t.successfullyExtractedLabel}: ${nodes.length}` });

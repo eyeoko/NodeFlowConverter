@@ -430,6 +430,8 @@ export function parseClashYaml(yamlText: string): ProxyNode[] {
 }
 
 // Converts a list of ProxyNodes into a complete Sing-Box Config
+export type Platform = 'macos' | 'windows' | 'linux' | 'vps' | 'router';
+
 export interface ConversionOptions {
   template: 'singbox-latest' | 'singbox-v1.8' | 'clash-meta';
   dnsStrategy: 'system' | 'fakeip';
@@ -440,6 +442,7 @@ export interface ConversionOptions {
   clashApiPort?: string;
   clashUiUrl?: string;
   cdnPrefix?: string;
+  platform?: Platform;
   enableTun?: boolean;
   enableMixed?: boolean;
   mixedPort?: string;
@@ -1320,15 +1323,53 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   }
 
   const configInbounds: any[] = [];
-  if (options.enableTun !== false) {
-    configInbounds.push({
+  const platform = options.platform || 'macos';
+
+  if (options.enableTun !== false && platform !== 'vps') {
+    const tunInbound: any = {
       type: 'tun',
       address: ['172.19.0.1/30'],
       auto_route: true,
-      strict_route: true,
-    });
+    };
+
+    switch (platform) {
+      case 'macos':
+        tunInbound.strict_route = true;
+        tunInbound.stack = 'mixed';
+        tunInbound.dns_mode = 'native';
+        tunInbound.platform = {
+          http_proxy: {
+            enabled: options.enableMixed !== false,
+            server: '127.0.0.1',
+            server_port: options.enableMixed !== false
+              ? (options.mixedPort ? parseInt(options.mixedPort, 10) : 2080)
+              : 2080,
+          },
+        };
+        break;
+      case 'windows':
+        tunInbound.strict_route = true;
+        tunInbound.stack = 'system';
+        tunInbound.dns_mode = 'hijack';
+        break;
+      case 'linux':
+        tunInbound.auto_redirect = true;
+        tunInbound.strict_route = true;
+        tunInbound.stack = 'mixed';
+        tunInbound.dns_mode = 'hijack';
+        break;
+      case 'router':
+        tunInbound.auto_redirect = true;
+        tunInbound.strict_route = false;
+        tunInbound.stack = 'mixed';
+        tunInbound.dns_mode = 'hijack';
+        break;
+    }
+
+    configInbounds.push(tunInbound);
   }
-  if (options.enableMixed !== false) {
+
+  if (options.enableMixed !== false && platform !== 'vps') {
     const portNum = options.mixedPort ? parseInt(options.mixedPort, 10) : 2080;
     configInbounds.push({
       type: 'mixed',

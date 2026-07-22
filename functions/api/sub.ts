@@ -1,4 +1,4 @@
-import { parseSubscription, generateSingBoxConfig } from '../../src/utils/parser';
+import { parseSubscription, generateSingBoxConfig, Platform } from '../../src/utils/parser';
 
 function safeAtob(base64: string): string {
   try {
@@ -30,6 +30,7 @@ export async function onRequest(context: EventContext<unknown, never, Record<str
       enableTun,
       enableMixed,
       mixedPort,
+      platform,
     } = Object.fromEntries(url.searchParams.entries());
 
     if (!config) {
@@ -51,12 +52,13 @@ export async function onRequest(context: EventContext<unknown, never, Record<str
       enableTun: enableTun !== 'false',
       enableMixed: enableMixed !== 'false',
       mixedPort: mixedPort ?? '2080',
+      platform: (platform ?? 'macos') as Platform,
     });
 
     return new Response(singBoxConfig, {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="singbox_config.json"',
+        'Content-Disposition': `attachment; filename="singbox-${platform || 'macos'}-latest.json"`,
       },
     });
   } catch (err: unknown) {
