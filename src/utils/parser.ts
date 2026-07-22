@@ -430,7 +430,7 @@ export function parseClashYaml(yamlText: string): ProxyNode[] {
 }
 
 // Converts a list of ProxyNodes into a complete Sing-Box Config
-export type Platform = 'macos' | 'windows' | 'linux' | 'vps' | 'router';
+export type Platform = 'macos' | 'windows' | 'linux' | 'android' | 'router';
 
 export interface ConversionOptions {
   template: 'singbox-latest' | 'singbox-v1.8' | 'clash-meta';
@@ -1325,7 +1325,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   const configInbounds: any[] = [];
   const platform = options.platform || 'macos';
 
-  if (options.enableTun !== false && platform !== 'vps') {
+  if (options.enableTun !== false) {
     const tunInbound: any = {
       type: 'tun',
       address: ['172.19.0.1/30'],
@@ -1358,6 +1358,10 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tunInbound.stack = 'mixed';
         tunInbound.dns_mode = 'hijack';
         break;
+      case 'android':
+        tunInbound.stack = 'mixed';
+        tunInbound.dns_mode = 'native';
+        break;
       case 'router':
         tunInbound.auto_redirect = true;
         tunInbound.strict_route = false;
@@ -1369,7 +1373,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     configInbounds.push(tunInbound);
   }
 
-  if (options.enableMixed !== false && platform !== 'vps') {
+  if (options.enableMixed !== false) {
     const portNum = options.mixedPort ? parseInt(options.mixedPort, 10) : 2080;
     configInbounds.push({
       type: 'mixed',

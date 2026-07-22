@@ -245,7 +245,7 @@ const LOCALES = {
     platformMacos: "macOS",
     platformWindows: "Windows",
     platformLinux: "Linux",
-    platformVps: "VPS 服务器",
+    platformAndroid: "Android",
     platformRouter: "路由器 (OpenWRT)",
     tunModeLabel: "🌐 启用 TUN 网卡模式",
     tunModeDesc: "创建虚拟网卡接管系统全局流量，适合整机系统级代理",
@@ -361,7 +361,7 @@ const LOCALES = {
     platformMacos: "macOS",
     platformWindows: "Windows",
     platformLinux: "Linux",
-    platformVps: "VPS Server",
+    platformAndroid: "Android",
     platformRouter: "Router (OpenWRT)",
     tunModeLabel: "🌐 Enable TUN Interface Mode",
     tunModeDesc: "Create virtual network card to route all system traffic",
@@ -971,7 +971,7 @@ export default function App() {
                   <option value="macos">{t.platformMacos}</option>
                   <option value="windows">{t.platformWindows}</option>
                   <option value="linux">{t.platformLinux}</option>
-                  <option value="vps">{t.platformVps}</option>
+                  <option value="android">{t.platformAndroid}</option>
                   <option value="router">{t.platformRouter}</option>
                 </select>
               </div>
