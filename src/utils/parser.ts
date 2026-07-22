@@ -1481,8 +1481,9 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   }
 
   // ── Clash API (REST, for web dashboard) ──
-  // Avoid download URL/detour that can block startup when GitHub is unreachable.
-  // The UI will still work if dashboard files exist locally (e.g. pre-downloaded).
+  // Headless platforms (linux/android/router) get the web UI download with direct detour
+  // so users can open the dashboard in a browser immediately.
+  // macOS skips the UI download (SFM build lacks with_clash_api; GUI provides its own UI).
   if (options.enableClashApi) {
     finalConfig.experimental = finalConfig.experimental || {};
     finalConfig.experimental.cache_file = { enabled: true };
@@ -1490,6 +1491,11 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       external_controller: options.clashApiPort || '127.0.0.1:9090',
       default_mode: 'rule',
     };
+    if (platform !== 'macos' && options.clashUiUrl) {
+      finalConfig.experimental.clash_api.external_ui = 'clash-dashboard';
+      finalConfig.experimental.clash_api.external_ui_download_url = options.clashUiUrl;
+      finalConfig.experimental.clash_api.external_ui_download_detour = 'direct';
+    }
   }
   // Pass-through template services / experimental (cache_file, etc.)
   if (baseConfig.services) {
