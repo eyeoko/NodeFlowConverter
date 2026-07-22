@@ -24,86 +24,6 @@ import {
   BookMarked,
 } from 'lucide-react';
 import { parseSubscription, generateSingBoxConfig, ProxyNode, serializeNodeToUri, Platform } from './utils/parser';
-import minimalPreset from '../presets/minimal.json';
-import standardPreset from '../presets/standard.json';
-import fullPreset from '../presets/full.json';
-
-const DEFAULT_BASE_TEMPLATE = `{
-  "$schema": "https://raw.githubusercontent.com/xmdhs/sing-box-generate-schema/refs/heads/master/schema.generated.json",
-  "log": {
-    "level": "info",
-    "timestamp": true
-  }
-}`;
-
-// Presets are loaded from presets/*.json — add new .json files there and register below
-const BASE_CONFIG_PRESETS: Record<string, string> = {
-  minimal: JSON.stringify(minimalPreset, null, 2),
-  standard: JSON.stringify(standardPreset, null, 2),
-  full: JSON.stringify(fullPreset, null, 2),
-};
-
-const PRESET_LABELS: Record<string, string> = {
-  minimal: 'Minimal (仅日志)',
-  standard: 'Standard (日志 + DNS)',
-  full: 'Full (日志 + DNS + TUN + Clash API)',
-};
-
-// Singleton-Box config validation
-function validateBaseConfig(jsonStr: string): { valid: boolean; messages: string[] } {
-  const messages: string[] = [];
-  if (!jsonStr.trim()) {
-    return { valid: false, messages: ['配置为空'] };
-  }
-  let parsed: any;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch (e: any) {
-    return { valid: false, messages: [`JSON 解析错误: ${e.message}`] };
-  }
-  // Check deprecated top-level fields
-  if (parsed.dns?.servers) {
-    for (const s of parsed.dns.servers) {
-      if (s.address !== undefined) {
-        messages.push('DNS 服务器使用了已废弃的 "address" 字段，请改用 "type" + "server"');
-      }
-    }
-    for (const r of parsed.dns.rules || []) {
-      if (r.outbound === 'dns_direct' || r.outbound === 'dns_proxy') {
-        messages.push('DNS 规则中的 "outbound" 应引用 DNS 服务器 tag，而非直接匹配 dns_direct/dns_proxy');
-      }
-    }
-  }
-  // Check deprecated outbound fields
-  const checkOutbound = (ob: any) => {
-    if (ob.alter_id !== undefined) {
-      messages.push(`节点 "${ob.tag || 'unknown'}" 包含已废弃的 "alter_id" 字段`);
-    }
-    if (ob.transport?.type === 'ws' && ob.transport.headers?.Host) {
-      messages.push(`节点 "${ob.tag || 'unknown'}" 使用 WS 传输时，建议用 tls.server_name 替代 headers.Host`);
-    }
-  };
-  if (parsed.outbounds) {
-    for (const ob of parsed.outbounds) {
-      checkOutbound(ob);
-    }
-  }
-  if (parsed.inbounds) {
-    // Check deprecated inbound fields
-    for (const ib of parsed.inbounds) {
-      if (ib.inet4_address !== undefined || ib.inet6_address !== undefined) {
-        messages.push(`Inbound "${ib.type}" 使用了已废弃的 inet4_address/inet6_address，请改用 "address"`);
-      }
-    }
-  }
-  if (!parsed.log) messages.push('建议添加 "log" 配置块以便排查问题');
-  if (!parsed.dns) messages.push('建议添加 "dns" 配置块');
-  if (!parsed.inbounds || parsed.inbounds.length === 0) messages.push('建议添加 "inbounds" 配置（TUN 或 Mixed）');
-  if (!parsed.outbounds || parsed.outbounds.length === 0) messages.push('建议添加 "outbounds" 配置');
-  if (!parsed.route) messages.push('建议添加 "route" 配置');
-  if (messages.length === 0) messages.push('配置格式检查通过，未发现兼容性问题');
-  return { valid: messages.filter(m => m.includes('已废弃') || m.includes('JSON 解析')).length === 0, messages };
-}
 
 // Sample nodes to let the user try out the converter instantly
 const SAMPLE_NODES = `# NodeFlow Subscription Example (Standard protocol links)
@@ -417,37 +337,10 @@ export default function App() {
 
 
 
-  // Custom Base Template States
-  const [customBaseTemplate, setCustomBaseTemplate] = useState<string>(() => {
-    return localStorage.getItem('nodeflow_custom_base_template') || DEFAULT_BASE_TEMPLATE;
-  });
-  const [isValidJson, setIsValidJson] = useState<boolean>(true);
-  const [baseConfigMode, setBaseConfigMode] = useState<'custom' | 'preset'>('preset');
-  const [selectedPreset, setSelectedPreset] = useState('minimal');
-  const [importUrl, setImportUrl] = useState('');
-  const [validationResult, setValidationResult] = useState<{ valid: boolean; messages: string[] } | null>(null);
   const [customRules, setCustomRules] = useState<{ type: 'domain' | 'ip' | 'rule_set'; value: string; outbound: 'proxy' | 'direct' | 'block' }[]>([]);
   const [newRuleType, setNewRuleType] = useState<'domain' | 'ip' | 'rule_set'>('domain');
   const [newRuleValue, setNewRuleValue] = useState('');
   const [newRuleOutbound, setNewRuleOutbound] = useState<'proxy' | 'direct'>('proxy');
-
-  useEffect(() => {
-    if (!customBaseTemplate.trim()) {
-      setIsValidJson(true);
-      return;
-    }
-    try {
-      JSON.parse(customBaseTemplate);
-      setIsValidJson(true);
-    } catch {
-      setIsValidJson(false);
-    }
-  }, [customBaseTemplate]);
-
-  // Persist custom base template to localStorage
-  useEffect(() => {
-    localStorage.setItem('nodeflow_custom_base_template', customBaseTemplate);
-  }, [customBaseTemplate]);
 
   // Parse local raw nodes whenever input or options change
   useEffect(() => {
@@ -477,13 +370,12 @@ export default function App() {
       enableTun,
       enableMixed,
       mixedPort,
-      customBaseTemplate: isValidJson ? customBaseTemplate : undefined,
       customRules,
     });
     setSingBoxConfig(generated);
     setEditableConfig(generated);
     setValidationMsg(null);
-  }, [rawInput, template, dnsStrategy, rulesets, platform, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customBaseTemplate, isValidJson, customRules]);
+  }, [rawInput, template, dnsStrategy, rulesets, platform, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customRules]);
 
   // Handle auto-closing notifications
   useEffect(() => {
@@ -1168,148 +1060,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Row 2 / Full: Base Config Template */}
-        <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col gap-4">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-            <div className="flex items-center gap-2">
-              <BookMarked className="w-5 h-5 text-indigo-500" />
-              <h2 className="text-lg font-bold font-display text-slate-800">
-                {lang === 'zh' ? '基础配置模板' : 'Base Config Template'}
-              </h2>
-              <div className="flex bg-slate-100 p-0.5 rounded-lg ml-2">
-                <button
-                  onClick={() => {
-                    setBaseConfigMode('preset');
-                    setValidationResult(null);
-                  }}
-                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
-                    baseConfigMode === 'preset'
-                      ? 'bg-white text-indigo-600 shadow-sm'
-                      : 'text-slate-400 hover:text-slate-600'
-                  }`}
-                >
-                  {lang === 'zh' ? '预设' : 'Preset'}
-                </button>
-                <button
-                  onClick={() => {
-                    setBaseConfigMode('custom');
-                    setValidationResult(null);
-                  }}
-                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
-                    baseConfigMode === 'custom'
-                      ? 'bg-white text-indigo-600 shadow-sm'
-                      : 'text-slate-400 hover:text-slate-600'
-                  }`}
-                >
-                  {lang === 'zh' ? '自定义' : 'Custom'}
-                </button>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 bg-slate-50 rounded-lg px-3 py-1.5 border border-slate-200 w-full md:w-96">
-                <Link className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                <input
-                  type="url"
-                  value={importUrl}
-                  onChange={(e) => setImportUrl(e.target.value)}
-                  placeholder={lang === 'zh' ? '导入远程配置 URL...' : 'Import config URL...'}
-                  className="flex-1 bg-transparent border-none outline-none text-xs text-slate-600 placeholder-slate-400 min-w-0"
-                />
-                <button
-                  onClick={async () => {
-                    if (!importUrl.trim()) return;
-                    try {
-                      const res = await fetch(`/api/fetch-subscription?url=${encodeURIComponent(importUrl.trim())}`);
-                      if (res.ok) {
-                        const text = await res.text();
-                        setCustomBaseTemplate(text);
-                        setBaseConfigMode('custom');
-                        setValidationResult(null);
-                      } else {
-                        setNotification({ type: 'error', message: `Import failed: ${res.status}` });
-                      }
-                    } catch {
-                      setNotification({ type: 'error', message: lang === 'zh' ? '导入失败，请检查 URL' : 'Import failed, check URL' });
-                    }
-                  }}
-                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 px-1.5 cursor-pointer"
-                >
-                  {lang === 'zh' ? '导入' : 'Import'}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {baseConfigMode === 'preset' && (
-            <select
-              value={selectedPreset}
-              onChange={(e) => {
-                const key = e.target.value;
-                setSelectedPreset(key);
-                setCustomBaseTemplate(BASE_CONFIG_PRESETS[key]);
-                setValidationResult(null);
-              }}
-              className="w-full md:w-72 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
-            >
-              {Object.entries(PRESET_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
-          )}
-
-          <div className="relative flex-1 min-h-[460px] flex flex-col">
-            <textarea
-              value={customBaseTemplate}
-              onChange={(e) => {
-                setCustomBaseTemplate(e.target.value);
-                setBaseConfigMode('custom');
-                setValidationResult(null);
-              }}
-              placeholder={lang === 'zh' ? '在此编辑 Sing-Box 基础配置 JSON...' : 'Edit Sing-Box base config JSON...'}
-              className="w-full flex-1 p-4 bg-slate-900 text-slate-200 rounded-xl font-mono text-xs leading-relaxed border border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 overflow-y-auto resize-none min-h-[460px]"
-              spellCheck={false}
-            />
-            <div className="absolute bottom-3 right-3 flex gap-2">
-              <button
-                onClick={() => {
-                  const result = validateBaseConfig(customBaseTemplate);
-                  setValidationResult(result);
-                }}
-                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer text-xs font-bold shadow-sm"
-              >
-                <Check className="w-3.5 h-3.5" />
-                {lang === 'zh' ? '验证' : 'Validate'}
-              </button>
-            </div>
-          </div>
-
-          {validationResult && (
-            <div className={`p-3 rounded-xl border text-xs ${
-              validationResult.valid
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                : 'bg-amber-50 border-amber-200 text-amber-700'
-            }`}>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                {validationResult.valid ? (
-                  <CheckCircle className="w-4 h-4 text-emerald-500" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-amber-500" />
-                )}
-                <span className="font-bold">
-                  {validationResult.valid
-                    ? (lang === 'zh' ? '格式检查通过' : 'Validation passed')
-                    : (lang === 'zh' ? '发现潜在问题' : 'Issues found')}
-                </span>
-              </div>
-              <ul className="space-y-0.5 pl-6 list-disc">
-                {validationResult.messages.map((msg, i) => <li key={i} className="text-xs">{msg}</li>)}
-              </ul>
-            </div>
-          )}
-        </div>
-
-
-        {/* Row 3 / Full: Parameters Selection & Stats */}
+        {/* Row 2 / Full: Parameters Selection & Stats */}
         <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col gap-6">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
@@ -1348,7 +1099,6 @@ export default function App() {
                     enableTun,
                     enableMixed,
                     mixedPort,
-                    customBaseTemplate: isValidJson ? customBaseTemplate : undefined,
                     customRules,
                   });
                   setSingBoxConfig(config);
