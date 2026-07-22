@@ -307,7 +307,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'preview' | 'nodes'>('preview');
 
   // Parameters
-  const template = 'singbox-latest';
   const [dnsStrategy, setDnsStrategy] = useState<'system' | 'fakeip'>('system');
   const [rulesets, setRulesets] = useState<string[]>(['AD-Block', 'China-Services', 'Private-Net']);
 
@@ -340,7 +339,7 @@ export default function App() {
   const [customRules, setCustomRules] = useState<{ type: 'domain' | 'ip' | 'rule_set'; value: string; outbound: 'proxy' | 'direct' | 'block' }[]>([]);
   const [newRuleType, setNewRuleType] = useState<'domain' | 'ip' | 'rule_set'>('domain');
   const [newRuleValue, setNewRuleValue] = useState('');
-  const [newRuleOutbound, setNewRuleOutbound] = useState<'proxy' | 'direct'>('proxy');
+  const [newRuleOutbound, setNewRuleOutbound] = useState<'proxy' | 'direct' | 'block'>('proxy');
 
   // Parse local raw nodes whenever input or options change
   useEffect(() => {
@@ -357,7 +356,6 @@ export default function App() {
 
     // Generate singbox config using offline parser
     const generated = generateSingBoxConfig(nodes, {
-      template,
       dnsStrategy,
       rulesets,
       platform,
@@ -375,7 +373,7 @@ export default function App() {
     setSingBoxConfig(generated);
     setEditableConfig(generated);
     setValidationMsg(null);
-  }, [rawInput, template, dnsStrategy, rulesets, platform, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customRules]);
+  }, [rawInput, dnsStrategy, rulesets, platform, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customRules]);
 
   // Handle auto-closing notifications
   useEffect(() => {
@@ -429,7 +427,7 @@ export default function App() {
       
       const params = new URLSearchParams();
       params.set('config', base64Config);
-      if (template) params.set('template', template);
+      params.set('platform', platform);
       if (dnsStrategy) params.set('dns', dnsStrategy);
       if (rulesets.length > 0) params.set('rulesets', rulesets.join(','));
       params.set('groupByCountry', String(groupByCountry));
@@ -437,6 +435,11 @@ export default function App() {
       params.set('enableClashApi', String(enableClashApi));
       if (clashApiPort) params.set('clashApiPort', clashApiPort);
       if (clashUiUrl) params.set('clashUiUrl', clashUiUrl);
+      params.set('enableTun', String(enableTun));
+      params.set('enableMixed', String(enableMixed));
+      if (mixedPort) params.set('mixedPort', mixedPort);
+      params.set('cdnType', cdnType);
+      if (customCdn) params.set('customCdn', customCdn);
       
       const subUrlString = `${window.location.origin}/api/sub?${params.toString()}`;
       await navigator.clipboard.writeText(subUrlString);
@@ -1086,7 +1089,6 @@ export default function App() {
                        : cdnType === 'github' ? 'https://raw.githubusercontent.com'
                        : 'https://testingcf.jsdelivr.net');
                   const config = generateSingBoxConfig(nodes, {
-                    template,
                     dnsStrategy,
                     rulesets,
                     platform,

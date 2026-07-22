@@ -19,7 +19,6 @@ export async function onRequest(context: EventContext<unknown, never, Record<str
   try {
     const {
       config,
-      template,
       dns,
       rulesets,
       groupByCountry,
@@ -41,7 +40,6 @@ export async function onRequest(context: EventContext<unknown, never, Record<str
     const parsedNodes = parseSubscription(rawText);
 
     const singBoxConfig = generateSingBoxConfig(parsedNodes, {
-      template: (template ?? 'singbox-latest') as 'singbox-latest',
       dnsStrategy: (dns ?? 'system') as 'system' | 'fakeip',
       rulesets: rulesets ? rulesets.split(',').filter(Boolean) : ['AD-Block', 'GeoIP:CN'],
       groupByCountry: groupByCountry === 'true',

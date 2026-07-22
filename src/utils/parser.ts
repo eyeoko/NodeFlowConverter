@@ -433,7 +433,6 @@ export function parseClashYaml(yamlText: string): ProxyNode[] {
 export type Platform = 'macos' | 'windows' | 'linux' | 'android' | 'router';
 
 export interface ConversionOptions {
-  template: 'singbox-latest' | 'singbox-v1.8' | 'clash-meta';
   dnsStrategy: 'system' | 'fakeip';
   rulesets: string[];
   groupByCountry?: boolean;
@@ -728,7 +727,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         ob.tls.alpn = node.alpn;
       }
     } else if (node.type === 'anytls') {
-      ob.type = 'trojan';
+      ob.type = 'anytls';
       ob.password = node.password || '';
       ob.tls = {
         enabled: true,
@@ -757,11 +756,13 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'dns_proxy',
         server: '8.8.8.8',
         path: '/dns-query',
+        server_name: 'dns.google',
       },
       {
         type: 'udp',
         tag: 'dns_direct',
         server: '223.5.5.5',
+        detour: 'direct',
       },
       {
         type: 'fakeip',
@@ -769,7 +770,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       }
     );
     // Node server domains must resolve via real DNS (not fakeip) so proxies can connect
-    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s)))];
+    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s) && !s.includes(':')))];
     if (nodeServers.length > 0) {
       dnsRules.push({
         domain: nodeServers,
@@ -799,7 +800,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     );
 
     // Bootstrap: proxy server domains must resolve via direct DNS (prevents loopback)
-    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s)))];
+    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s) && !s.includes(':')))];
     if (nodeServers.length > 0) {
       dnsRules.push({
         domain: nodeServers,
@@ -1402,7 +1403,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   finalConfig.dns = {
     servers: [...dnsServers],
     rules: [...dnsRules],
-    final: 'dns_direct',
+    final: options.dnsStrategy === 'fakeip' ? 'dns_fakeip' : 'dns_direct',
     strategy: 'ipv4_only',
   };
   if (options.dnsStrategy === 'fakeip') {
@@ -1595,11 +1596,11 @@ export function serializeNodeToUri(node: ProxyNode): string {
     }
     case 'tuic': {
       const params = new URLSearchParams();
-      if (node.uuid) params.set('uuid', node.uuid);
       if (node.password) params.set('pass', node.password);
       if (node.alpn && node.alpn.length) params.set('alpn', node.alpn.join(','));
       const query = params.toString();
-      return `tuic://@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
+      const uuidPart = encodeURIComponent(node.uuid || '');
+      return `tuic://${uuidPart}@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
     }
     default:
       return node.raw || '';
