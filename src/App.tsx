@@ -409,7 +409,6 @@ export default function App() {
     return localStorage.getItem('nodeflow_custom_base_template') || DEFAULT_BASE_TEMPLATE;
   });
   const [isValidJson, setIsValidJson] = useState<boolean>(true);
-  const [, setJsonError] = useState<string>('');
   const [baseConfigMode, setBaseConfigMode] = useState<'custom' | 'preset'>('preset');
   const [selectedPreset, setSelectedPreset] = useState('minimal');
   const [importUrl, setImportUrl] = useState('');
@@ -419,20 +418,16 @@ export default function App() {
   const [newRuleValue, setNewRuleValue] = useState('');
   const [newRuleOutbound, setNewRuleOutbound] = useState<'proxy' | 'direct'>('proxy');
 
-  // Validate custom base template in real-time
   useEffect(() => {
     if (!customBaseTemplate.trim()) {
       setIsValidJson(true);
-      setJsonError('');
       return;
     }
     try {
       JSON.parse(customBaseTemplate);
       setIsValidJson(true);
-      setJsonError('');
-    } catch (err: any) {
+    } catch {
       setIsValidJson(false);
-      setJsonError(err.message);
     }
   }, [customBaseTemplate]);
 
@@ -553,7 +548,7 @@ export default function App() {
   // Download singbox.json file
   const handleDownload = () => {
     try {
-      const blob = new Blob([singBoxConfig], { type: 'application/json' });
+      const blob = new Blob([editableConfig], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -852,9 +847,13 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(rawInput);
-                    setNotification({ type: 'success', message: t.toastCopiedSuccess });
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(rawInput);
+                      setNotification({ type: 'success', message: t.toastCopiedSuccess });
+                    } catch {
+                      setNotification({ type: 'error', message: lang === 'zh' ? '复制失败' : 'Copy failed' });
+                    }
                   }}
                   className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-md transition-colors border border-slate-700 cursor-pointer"
                   title="Copy Source"
@@ -1194,8 +1193,12 @@ export default function App() {
                         setCustomBaseTemplate(text);
                         setBaseConfigMode('custom');
                         setValidationResult(null);
+                      } else {
+                        setNotification({ type: 'error', message: `Import failed: ${res.status}` });
                       }
-                    } catch {}
+                    } catch {
+                      setNotification({ type: 'error', message: lang === 'zh' ? '导入失败，请检查 URL' : 'Import failed, check URL' });
+                    }
                   }}
                   className="text-xs font-bold text-indigo-600 hover:text-indigo-800 px-1.5 cursor-pointer"
                 >
