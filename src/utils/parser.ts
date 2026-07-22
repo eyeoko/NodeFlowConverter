@@ -788,10 +788,10 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         server: '223.5.5.5',
       },
       {
-        type: 'udp',
+        type: 'https',
         tag: 'dns_proxy',
         server: '8.8.8.8',
-        detour: 'proxy',
+        path: '/dns-query',
       }
     );
 
