@@ -19,23 +19,44 @@ export interface ProxyNode {
   udp?: boolean;
   auth?: string;
   alpn?: string[];
+  insecure?: boolean;
+  fp?: string;
   flow?: string;
-  publicKey?: string;
-  shortId?: string;
-  fingerprint?: string;
+  security?: string;
+  pbk?: string;
+  sid?: string;
+  congestionControl?: string;
+  udpRelayMode?: string;
+  zeroRttHandshake?: boolean;
+  obfs?: string;
+  obfsPassword?: string;
+  ports?: string;
   raw: string;
 }
 
-// Safely decode Base64, supporting UTF-8 strings
+// Safely decode Base64, supporting UTF-8 strings and URL-safe base64
 export function decodeBase64(str: string): string {
   try {
-    const trimmed = str.trim();
-    // Check if it looks like a valid base64 (only alphanumeric, +, /, and = padding)
-    if (!/^[A-Za-z0-9+/=\s\n\r]+$/.test(trimmed)) {
+    if (!str || typeof str !== 'string') return '';
+    let trimmed = str.trim();
+    if (!trimmed) return '';
+
+    // Remove internal whitespace / newlines
+    trimmed = trimmed.replace(/\s+/g, '');
+
+    // Convert URL-safe Base64 to standard Base64
+    trimmed = trimmed.replace(/-/g, '+').replace(/_/g, '/');
+
+    // Add missing padding
+    while (trimmed.length % 4 !== 0) {
+      trimmed += '=';
+    }
+
+    if (!/^[A-Za-z0-9+/=]+$/.test(trimmed)) {
       return '';
     }
+
     const decoded = atob(trimmed);
-    // Convert binary string to UTF-8
     const bytes = new Uint8Array(decoded.length);
     for (let i = 0; i < decoded.length; i++) {
       bytes[i] = decoded.charCodeAt(i);
@@ -111,28 +132,105 @@ export function parseSubscription(rawText: string): ProxyNode[] {
   return nodes;
 }
 
-// Parses vmess://<base64_json>
+// Parses vmess://<base64_json> or vmess://uuid@server:port?type=ws...
 function parseVmess(urlStr: string): ProxyNode | null {
   try {
-    const rawBase64 = urlStr.replace('vmess://', '').trim();
-    const jsonStr = atob(rawBase64);
-    const data = JSON.parse(jsonStr);
+    let mainPart = urlStr.trim();
+    let overrideName = '';
 
-    return {
-      type: 'vmess',
-      name: data.ps || 'VMess-' + (data.add || 'Node'),
-      server: data.add || '',
-      port: Number(data.port) || 443,
-      uuid: data.id || '',
-      network: data.net || 'tcp',
-      path: data.path || '',
-      host: data.host || '',
-      tls: data.tls === 'tls' || data.tls === true,
-      sni: data.sni || data.host || '',
-      raw: urlStr,
-    };
+    const hashIdx = mainPart.indexOf('#');
+    if (hashIdx !== -1) {
+      overrideName = decodeURIComponent(mainPart.substring(hashIdx + 1));
+      mainPart = mainPart.substring(0, hashIdx);
+    }
+
+    const rawBase64 = mainPart.replace(/^vmess:\/\//i, '').split('?')[0].trim();
+
+    // 1. Try decoding as Base64 JSON
+    let jsonStr = decodeBase64(rawBase64);
+    if (!jsonStr) {
+      try {
+        let b64 = rawBase64.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4 !== 0) b64 += '=';
+        jsonStr = atob(b64);
+      } catch (_) {}
+    }
+
+    if (jsonStr) {
+      const startJson = jsonStr.indexOf('{');
+      const endJson = jsonStr.lastIndexOf('}');
+      if (startJson !== -1 && endJson !== -1 && endJson > startJson) {
+        jsonStr = jsonStr.substring(startJson, endJson + 1);
+        const data = JSON.parse(jsonStr);
+        if (data && (data.add || data.host || data.server)) {
+          const server = data.add || data.host || data.server || '';
+          const port = Number(data.port) || 443;
+          const uuid = data.id || data.uuid || '';
+          const network = data.net || data.network || 'tcp';
+          let path = data.path || '';
+          if (path && path.includes('%')) {
+            try { path = decodeURIComponent(path); } catch (_) {}
+          }
+          const host = data.host || '';
+          const tls = data.tls === 'tls' || data.tls === '1' || data.tls === true;
+          const sni = data.sni || data.host || server;
+          const name = overrideName || data.ps || data.remark || ('VMess-' + server);
+
+          return {
+            type: 'vmess',
+            name,
+            server,
+            port,
+            uuid,
+            network,
+            path,
+            host,
+            tls,
+            sni,
+            raw: urlStr,
+          };
+        }
+      }
+    }
+
+    // 2. Try parsing as standard URL (vmess://uuid@server:port?type=ws&...)
+    try {
+      const url = new URL(urlStr);
+      const uuid = url.username;
+      const server = url.hostname;
+      const port = Number(url.port) || 443;
+      const name = overrideName || decodeURIComponent(url.hash.substring(1)) || ('VMess-' + server);
+      const params = url.searchParams;
+      const network = params.get('type') || params.get('net') || 'tcp';
+      let path = params.get('path') || '';
+      if (path && path.includes('%')) {
+        try { path = decodeURIComponent(path); } catch (_) {}
+      }
+      if (network === 'ws' && !path) path = '/';
+      const host = params.get('host') || params.get('headerType') || '';
+      const security = params.get('security');
+      const tls = security === 'tls' || !!params.get('sni') || (security !== 'none' && port === 443);
+      const sni = params.get('sni') || host || server;
+
+      if (uuid && server) {
+        return {
+          type: 'vmess',
+          name,
+          server,
+          port,
+          uuid,
+          network,
+          path,
+          host,
+          tls,
+          sni,
+          raw: urlStr,
+        };
+      }
+    } catch (_) {}
+
+    return null;
   } catch (e) {
-    // Some vmess links might be encoded differently or be older configurations
     return null;
   }
 }
@@ -140,23 +238,73 @@ function parseVmess(urlStr: string): ProxyNode | null {
 // Parses vless://uuid@server:port?query=xyz#remarks
 function parseVless(urlStr: string): ProxyNode | null {
   try {
-    const url = new URL(urlStr);
-    const uuid = url.username;
-    const server = url.hostname;
-    const port = Number(url.port) || 443;
-    const name = decodeURIComponent(url.hash.substring(1)) || 'VLESS-' + server;
+    let uuid = '';
+    let server = '';
+    let port = 443;
+    let name = '';
+    let search = '';
+    let hash = '';
 
-    const params = url.searchParams;
-    const network = params.get('type') || 'tcp';
-    const path = params.get('path') || '';
-    const host = params.get('host') || '';
-    const security = params.get('security');
-    const tls = security === 'tls' || security === 'reality' || !!params.get('sni');
-    const sni = params.get('sni') || '';
+    try {
+      const cleanUrlStr = urlStr.replace(/\s/g, '%20');
+      const url = new URL(cleanUrlStr);
+      uuid = url.username;
+      server = url.hostname;
+      port = Number(url.port) || 443;
+      search = url.search;
+      hash = url.hash;
+    } catch (_) {
+      // Regex fallback for URLs with unencoded characters or non-standard formatting
+      const match = urlStr.match(/^vless:\/\/(?:([^@]+)@)?([^:/?#]+)(?::(\d+))?(?:\?([^#]*))?(?:#(.*))?$/i);
+      if (!match) return null;
+      uuid = match[1] || '';
+      server = match[2] || '';
+      port = Number(match[3]) || 443;
+      search = match[4] ? '?' + match[4] : '';
+      hash = match[5] ? '#' + match[5] : '';
+    }
+
+    if (!uuid || !server) return null;
+
+    if (hash) {
+      const rawHash = hash.startsWith('#') ? hash.substring(1) : hash;
+      try {
+        name = decodeURIComponent(rawHash);
+      } catch (_) {
+        name = rawHash;
+      }
+    }
+    if (!name) name = 'VLESS-' + server;
+
+    const params = new URLSearchParams(search);
+    const rawType = params.get('type') || params.get('net');
+    let network = rawType || 'tcp';
+    let path = params.get('path') || params.get('serviceName') || '';
+    if (path && path.includes('%')) {
+      try { path = decodeURIComponent(path); } catch (_) {}
+    }
+
+    const host = params.get('host') || params.get('headerType') || '';
+    const security = params.get('security') || (params.has('pbk') ? 'reality' : '');
+    const sni = params.get('sni') || host || '';
+
+    // Smart Cloudflare / CDN WebSocket auto-detection when 'type' / 'net' is omitted in URL query
+    if (!rawType) {
+      const isIP = /^(\d{1,3}\.){3}\d{1,3}$/.test(server) || server.includes(':');
+      const cfPorts = [2052, 2053, 2082, 2083, 2086, 2087, 2095, 2096, 8443];
+      if (path || (sni && sni !== server) || (host && host !== server) || (isIP && (sni || cfPorts.includes(port)))) {
+        network = 'ws';
+      }
+    }
+
+    if (network === 'ws' && !path) path = '/';
+    const tls = security === 'tls' || security === 'reality' || !!sni || (security !== 'none' && port === 443);
     const flow = params.get('flow') || '';
-    const publicKey = params.get('pbk') || params.get('publicKey') || '';
-    const shortId = params.get('sid') || params.get('shortId') || '';
-    const fingerprint = params.get('fp') || params.get('fingerprint') || '';
+    const fp = params.get('fp') || params.get('fingerprint') || '';
+    const pbk = params.get('pbk') || params.get('publicKey') || '';
+    const sid = params.get('sid') || params.get('shortId') || '';
+    const insecure = params.get('allowInsecure') === '1' || params.get('insecure') === '1' || params.get('insecure') === 'true';
+    const alpn = params.get('alpn') ? params.get('alpn')!.split(',') : undefined;
 
     return {
       type: 'vless',
@@ -166,13 +314,16 @@ function parseVless(urlStr: string): ProxyNode | null {
       uuid,
       network,
       path,
-      host,
+      host: host || sni,
       tls,
-      sni,
+      sni: sni || host || server,
       flow,
-      publicKey,
-      shortId,
-      fingerprint,
+      fp,
+      security,
+      pbk,
+      sid,
+      insecure,
+      alpn,
       raw: urlStr,
     };
   } catch (e) {
@@ -180,55 +331,99 @@ function parseVless(urlStr: string): ProxyNode | null {
   }
 }
 
-// Parses ss://base64(method:password)@server:port#remarks or ss://base64_method_password_server_port#remarks
+// Parses shadowsocks links: ss://base64(method:password@server:port)#remarks, ss://base64(method:password)@server:port#remarks, etc.
 function parseShadowsocks(urlStr: string): ProxyNode | null {
   try {
-    const url = new URL(urlStr);
-    const hashStr = decodeURIComponent(url.hash.substring(1));
-    let name = hashStr || 'SS-' + url.hostname;
+    let mainPart = urlStr.trim();
+    let name = 'SS-Node';
 
-    // Standard ss scheme: ss://base64_userInfo@server:port
-    if (url.username) {
-      let userInfo = url.username;
-      try {
-        userInfo = atob(url.username);
-      } catch {}
-
-      const parts = userInfo.split(':');
-      if (parts.length >= 2) {
-        return {
-          type: 'ss',
-          name,
-          server: url.hostname,
-          port: Number(url.port) || 8388,
-          method: parts[0],
-          password: parts.slice(1).join(':'),
-          raw: urlStr,
-        };
-      }
+    // Extract hash tag (#name)
+    const hashIdx = mainPart.indexOf('#');
+    if (hashIdx !== -1) {
+      name = decodeURIComponent(mainPart.substring(hashIdx + 1)) || name;
+      mainPart = mainPart.substring(0, hashIdx);
     }
 
-    // Modern SIP002 shadowsocks URL scheme
-    // ss://base64(method:password)@host:port
-    let decodedUserInfo = '';
+    mainPart = mainPart.replace(/^ss:\/\//i, '').trim();
 
-    // Check if user info is base64
-    const userInfoB64 = urlStr.split('://')[1]?.split('@')[0];
-    if (userInfoB64) {
-      try {
-        decodedUserInfo = atob(userInfoB64);
-      } catch {}
-    }
+    // Case 1: ss://base64(method:password@server:port)
+    const decodedFull = decodeBase64(mainPart);
+    if (decodedFull && decodedFull.includes('@') && decodedFull.includes(':')) {
+      const atIdx = decodedFull.lastIndexOf('@');
+      const userInfo = decodedFull.substring(0, atIdx);
+      const serverPort = decodedFull.substring(atIdx + 1);
 
-    if (decodedUserInfo && decodedUserInfo.includes(':')) {
-      const parts = decodedUserInfo.split(':');
+      const colonIdx = userInfo.indexOf(':');
+      const method = colonIdx !== -1 ? userInfo.substring(0, colonIdx) : 'aes-256-gcm';
+      const password = colonIdx !== -1 ? userInfo.substring(colonIdx + 1) : userInfo;
+
+      const lastColon = serverPort.lastIndexOf(':');
+      const server = lastColon !== -1 ? serverPort.substring(0, lastColon) : serverPort;
+      const port = lastColon !== -1 ? Number(serverPort.substring(lastColon + 1)) || 8388 : 8388;
+
       return {
         type: 'ss',
         name,
-        server: url.hostname || url.host.split(':')[0],
-        port: Number(url.port) || 8388,
-        method: parts[0],
-        password: parts[1],
+        server,
+        port,
+        method,
+        password,
+        raw: urlStr,
+      };
+    }
+
+    // Case 2: SIP002 format: ss://base64(method:password)@server:port/?query
+    if (mainPart.includes('@')) {
+      const atIdx = mainPart.lastIndexOf('@');
+      const userPart = mainPart.substring(0, atIdx);
+      let serverPart = mainPart.substring(atIdx + 1);
+
+      const queryIdx = serverPart.indexOf('?');
+      if (queryIdx !== -1) {
+        serverPart = serverPart.substring(0, queryIdx);
+      }
+
+      let userInfo = decodeBase64(userPart) || userPart;
+      const colonIdx = userInfo.indexOf(':');
+      const method = colonIdx !== -1 ? userInfo.substring(0, colonIdx) : 'aes-256-gcm';
+      const password = colonIdx !== -1 ? userInfo.substring(colonIdx + 1) : userInfo;
+
+      const lastColon = serverPart.lastIndexOf(':');
+      const server = lastColon !== -1 ? serverPart.substring(0, lastColon) : serverPart;
+      const port = lastColon !== -1 ? Number(serverPart.substring(lastColon + 1)) || 8388 : 8388;
+
+      return {
+        type: 'ss',
+        name,
+        server,
+        port,
+        method,
+        password,
+        raw: urlStr,
+      };
+    }
+
+    // Case 3: Plain method:password@server:port (no base64)
+    if (mainPart.includes('@') && mainPart.includes(':')) {
+      const atIdx = mainPart.lastIndexOf('@');
+      const userInfo = mainPart.substring(0, atIdx);
+      const serverPart = mainPart.substring(atIdx + 1);
+
+      const colonIdx = userInfo.indexOf(':');
+      const method = colonIdx !== -1 ? userInfo.substring(0, colonIdx) : 'aes-256-gcm';
+      const password = colonIdx !== -1 ? userInfo.substring(colonIdx + 1) : userInfo;
+
+      const lastColon = serverPart.lastIndexOf(':');
+      const server = lastColon !== -1 ? serverPart.substring(0, lastColon) : serverPart;
+      const port = lastColon !== -1 ? Number(serverPart.substring(lastColon + 1)) || 8388 : 8388;
+
+      return {
+        type: 'ss',
+        name,
+        server,
+        port,
+        method,
+        password,
         raw: urlStr,
       };
     }
@@ -249,8 +444,14 @@ function parseTrojan(urlStr: string): ProxyNode | null {
     const name = decodeURIComponent(url.hash.substring(1)) || 'Trojan-' + server;
 
     const params = url.searchParams;
-    const sni = params.get('sni') || '';
+    const network = params.get('type') || params.get('net') || 'tcp';
+    const path = params.get('path') || params.get('serviceName') || '';
+    const host = params.get('host') || '';
+    const sni = params.get('sni') || host || '';
     const tls = params.get('security') !== 'none';
+    const insecure = params.get('allowInsecure') === '1' || params.get('insecure') === '1' || params.get('insecure') === 'true';
+    const alpn = params.get('alpn') ? params.get('alpn')!.split(',') : undefined;
+    const fp = params.get('fp') || params.get('fingerprint') || '';
 
     return {
       type: 'trojan',
@@ -258,8 +459,14 @@ function parseTrojan(urlStr: string): ProxyNode | null {
       server,
       port,
       password,
+      network,
+      path,
+      host,
       tls,
       sni,
+      insecure,
+      alpn,
+      fp,
       raw: urlStr,
     };
   } catch (e) {
@@ -270,16 +477,20 @@ function parseTrojan(urlStr: string): ProxyNode | null {
 // Parses hysteria2://auth@server:port?query=xyz#remarks
 function parseHysteria2(urlStr: string): ProxyNode | null {
   try {
-    const cleanUrl = urlStr.replace('hy2://', 'hysteria2://');
+    const cleanUrl = urlStr.replace(/^hy2:\/\//i, 'hysteria2://');
     const url = new URL(cleanUrl);
-    const auth = url.username;
+    const auth = url.password || url.username || url.searchParams.get('auth') || url.searchParams.get('password') || '';
     const server = url.hostname;
     const port = Number(url.port) || 443;
     const name = decodeURIComponent(url.hash.substring(1)) || 'Hysteria2-' + server;
 
     const params = url.searchParams;
     const sni = params.get('sni') || '';
-    const alpn = params.get('alpn')?.split(',') || [];
+    const alpn = params.get('alpn') ? params.get('alpn')!.split(',') : undefined;
+    const obfs = params.get('obfs') || '';
+    const obfsPassword = params.get('obfs-password') || params.get('obfs_password') || '';
+    const ports = params.get('mport') || params.get('ports') || '';
+    const insecure = params.get('insecure') === '1' || params.get('allowInsecure') === '1' || params.get('insecure') === 'true';
 
     return {
       type: 'hysteria2',
@@ -290,6 +501,10 @@ function parseHysteria2(urlStr: string): ProxyNode | null {
       tls: true,
       sni,
       alpn,
+      obfs,
+      obfsPassword,
+      ports,
+      insecure,
       raw: urlStr,
     };
   } catch (e) {
@@ -302,13 +517,18 @@ function parseTuic(urlStr: string): ProxyNode | null {
   try {
     const url = new URL(urlStr);
     const uuid = url.username;
+    const password = url.password || url.searchParams.get('password') || url.searchParams.get('token') || '';
     const server = url.hostname;
     const port = Number(url.port) || 443;
     const name = decodeURIComponent(url.hash.substring(1)) || 'TUIC-' + server;
 
     const params = url.searchParams;
     const sni = params.get('sni') || '';
-    const alpn = params.get('alpn')?.split(',') || [];
+    const alpn = params.get('alpn') ? params.get('alpn')!.split(',') : ['h3'];
+    const congestionControl = params.get('congestion_control') || params.get('cc') || 'bbr';
+    const udpRelayMode = params.get('udp_relay_mode') || params.get('mode') || 'native';
+    const zeroRttHandshake = params.get('zero_rtt_handshake') === '1' || params.get('zero_rtt') === 'true';
+    const insecure = params.get('allowInsecure') === '1' || params.get('insecure') === '1' || params.get('insecure') === 'true';
 
     return {
       type: 'tuic',
@@ -316,9 +536,14 @@ function parseTuic(urlStr: string): ProxyNode | null {
       server,
       port,
       uuid,
+      password,
       tls: true,
       sni,
       alpn,
+      congestionControl,
+      udpRelayMode,
+      zeroRttHandshake,
+      insecure,
       raw: urlStr,
     };
   } catch (e) {
@@ -330,14 +555,15 @@ function parseTuic(urlStr: string): ProxyNode | null {
 function parseAnytls(urlStr: string): ProxyNode | null {
   try {
     const url = new URL(urlStr);
-    const password = url.username;
+    const password = url.password || url.username || url.searchParams.get('password') || '';
     const server = url.hostname;
     const port = Number(url.port) || 443;
     const name = decodeURIComponent(url.hash.substring(1)) || 'AnyTLS-' + server;
 
     const params = url.searchParams;
     const sni = params.get('sni') || '';
-    const alpn = params.get('alpn')?.split(',') || [];
+    const alpn = params.get('alpn') ? params.get('alpn')!.split(',') : undefined;
+    const insecure = params.get('allowInsecure') === '1' || params.get('insecure') === '1' || params.get('insecure') === 'true';
 
     return {
       type: 'anytls',
@@ -348,6 +574,7 @@ function parseAnytls(urlStr: string): ProxyNode | null {
       tls: true,
       sni,
       alpn,
+      insecure,
       raw: urlStr,
     };
   } catch (e) {
@@ -366,6 +593,9 @@ function parseClashProxyLine(line: string): ProxyNode | null {
     const uuidMatch = line.match(/uuid:\s*['"]?([^'",}]+)['"]?/);
     const cipherMatch = line.match(/(?:cipher|method):\s*['"]?([^'",}]+)['"]?/);
     const passwordMatch = line.match(/password:\s*['"]?([^'",}]+)['"]?/);
+    const sniMatch = line.match(/(?:sni|servername):\s*['"]?([^'",}]+)['"]?/);
+    const flowMatch = line.match(/flow:\s*['"]?([^'",}]+)['"]?/);
+    const insecureMatch = line.match(/(?:skip-cert-verify|insecure):\s*(true|false)/i);
 
     if (!nameMatch || !typeMatch || !serverMatch || !portMatch) return null;
 
@@ -391,6 +621,9 @@ function parseClashProxyLine(line: string): ProxyNode | null {
       uuid: uuidMatch ? uuidMatch[1].trim() : undefined,
       password: passwordMatch ? passwordMatch[1].trim() : undefined,
       method: cipherMatch ? cipherMatch[1].trim() : undefined,
+      sni: sniMatch ? sniMatch[1].trim() : undefined,
+      flow: flowMatch ? flowMatch[1].trim() : undefined,
+      insecure: insecureMatch ? insecureMatch[1].toLowerCase() === 'true' : false,
       raw: line,
     };
   } catch (e) {
@@ -644,9 +877,92 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       ob.type = 'vmess';
       ob.uuid = node.uuid || '';
       ob.security = 'auto';
+      ob.alter_id = 0;
       if (node.network && node.network !== 'tcp') {
         ob.transport = {
-          type: node.network,
+          type: node.network === 'h2' ? 'http' : node.network,
+        };
+        if (node.network === 'ws') {
+          ob.transport.path = node.path || '/';
+          const hostHeader = node.host || node.sni || node.server;
+          if (hostHeader) ob.transport.headers = { Host: hostHeader };
+          if (node.path && (node.path.includes('ed=') || node.path.includes('early_data'))) {
+            const edMatch = node.path.match(/ed=(\d+)/);
+            ob.transport.max_early_data = edMatch ? parseInt(edMatch[1], 10) : 2048;
+            ob.transport.early_data_header_name = 'Sec-WebSocket-Protocol';
+          }
+        } else if (node.network === 'grpc' && node.path) {
+          ob.transport.service_name = node.path;
+        } else if ((node.network === 'http' || node.network === 'h2') && node.path) {
+          ob.transport.path = node.path;
+          if (node.host || node.sni) ob.transport.host = [node.host || node.sni!];
+        }
+      }
+      if (node.tls) {
+        ob.tls = {
+          enabled: true,
+          server_name: node.sni || node.host || node.server,
+          insecure: !!node.insecure,
+        };
+      }
+    } else if (node.type === 'vless') {
+      ob.type = 'vless';
+      ob.uuid = node.uuid || '';
+      if (node.flow) {
+        ob.flow = node.flow;
+      }
+      if (node.network && node.network !== 'tcp') {
+        ob.transport = {
+          type: node.network === 'h2' ? 'http' : node.network,
+        };
+        if (node.network === 'ws') {
+          let cleanPath = node.path || '/';
+          if (cleanPath.includes('ed=') || cleanPath.includes('early_data')) {
+            const edMatch = cleanPath.match(/ed=(\d+)/);
+            ob.transport.max_early_data = edMatch ? parseInt(edMatch[1], 10) : 2560;
+            ob.transport.early_data_header_name = 'Sec-WebSocket-Protocol';
+            cleanPath = cleanPath.replace(/(\?|&)ed=\d+/, '').replace(/\?$/, '');
+            if (!cleanPath) cleanPath = '/';
+          }
+          ob.transport.path = cleanPath;
+          const hostHeader = node.host || node.sni || node.server;
+          if (hostHeader) ob.transport.headers = { Host: hostHeader };
+        } else if (node.network === 'grpc' && node.path) {
+          ob.transport.service_name = node.path;
+        } else if ((node.network === 'http' || node.network === 'h2') && node.path) {
+          ob.transport.path = node.path;
+          if (node.host || node.sni) ob.transport.host = [node.host || node.sni!];
+        }
+      }
+      if (node.tls) {
+        ob.tls = {
+          enabled: true,
+          server_name: node.sni || node.host || node.server,
+          insecure: !!node.insecure,
+        };
+        if (node.fp) {
+          ob.tls.utls = {
+            enabled: true,
+            fingerprint: node.fp === 'randomized' ? 'chrome' : node.fp,
+          };
+        }
+        if (node.security === 'reality' || node.pbk) {
+          ob.tls.reality = {
+            enabled: true,
+            public_key: node.pbk || '',
+            short_id: node.sid || '',
+          };
+        }
+        if (node.alpn && node.alpn.length > 0) {
+          ob.tls.alpn = node.alpn;
+        }
+      }
+    } else if (node.type === 'trojan') {
+      ob.type = 'trojan';
+      ob.password = node.password || '';
+      if (node.network && node.network !== 'tcp') {
+        ob.transport = {
+          type: node.network === 'h2' ? 'http' : node.network,
         };
         if (node.network === 'ws' && node.path) {
           ob.transport.path = node.path;
@@ -658,60 +974,35 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       if (node.tls) {
         ob.tls = {
           enabled: true,
-          server_name: node.sni || node.host || node.server,
-          insecure: false,
-        };
-      }
-    } else if (node.type === 'vless') {
-      ob.type = 'vless';
-      ob.uuid = node.uuid || '';
-      if (node.network && node.network !== 'tcp') {
-        ob.transport = {
-          type: node.network,
-        };
-        if (node.network === 'ws' && node.path) {
-          ob.transport.path = node.path;
-          if (node.host) ob.transport.headers = { Host: node.host };
-        }
-      }
-      if (node.tls) {
-        ob.tls = {
-          enabled: true,
-          server_name: node.sni || node.host || node.server,
-        };
-      }
-      if (node.flow) {
-        ob.flow = node.flow;
-      }
-      if (node.publicKey) {
-        ob.tls = ob.tls || { enabled: true };
-        ob.tls.reality = {
-          enabled: true,
-          public_key: node.publicKey,
-          short_id: node.shortId || '',
-        };
-      }
-      if (node.fingerprint && ob.tls) {
-        ob.tls.utls = {
-          enabled: true,
-          fingerprint: node.fingerprint,
-        };
-      }
-    } else if (node.type === 'trojan') {
-      ob.type = 'trojan';
-      ob.password = node.password || '';
-      if (node.tls) {
-        ob.tls = {
-          enabled: true,
           server_name: node.sni || node.server,
+          insecure: !!node.insecure,
         };
+        if (node.fp) {
+          ob.tls.utls = {
+            enabled: true,
+            fingerprint: node.fp,
+          };
+        }
+        if (node.alpn && node.alpn.length > 0) {
+          ob.tls.alpn = node.alpn;
+        }
       }
     } else if (node.type === 'hysteria2') {
       ob.type = 'hysteria2';
-      ob.password = node.auth || '';
+      ob.password = node.auth || node.password || '';
+      if (node.obfs) {
+        ob.obfs = {
+          type: node.obfs,
+          password: node.obfsPassword || '',
+        };
+      }
+      if (node.ports) {
+        ob.ports = node.ports;
+      }
       ob.tls = {
         enabled: true,
         server_name: node.sni || node.server,
+        insecure: !!node.insecure,
       };
       if (node.alpn && node.alpn.length > 0) {
         ob.tls.alpn = node.alpn;
@@ -719,20 +1010,25 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     } else if (node.type === 'tuic') {
       ob.type = 'tuic';
       ob.uuid = node.uuid || '';
+      ob.password = node.password || node.auth || '';
+      ob.congestion_control = node.congestionControl || 'bbr';
+      ob.udp_relay_mode = node.udpRelayMode || 'native';
+      if (node.zeroRttHandshake) {
+        ob.zero_rtt_handshake = true;
+      }
       ob.tls = {
         enabled: true,
         server_name: node.sni || node.server,
+        insecure: !!node.insecure,
+        alpn: node.alpn && node.alpn.length > 0 ? node.alpn : ['h3'],
       };
-      if (node.alpn && node.alpn.length > 0) {
-        ob.tls.alpn = node.alpn;
-      }
     } else if (node.type === 'anytls') {
       ob.type = 'anytls';
-      ob.password = node.password || '';
+      ob.password = node.password || node.auth || '';
       ob.tls = {
         enabled: true,
         server_name: node.sni || node.server,
-        insecure: true,
+        insecure: !!node.insecure,
       };
       if (node.alpn && node.alpn.length > 0) {
         ob.tls.alpn = node.alpn;
@@ -1596,11 +1892,20 @@ export function serializeNodeToUri(node: ProxyNode): string {
     }
     case 'tuic': {
       const params = new URLSearchParams();
-      if (node.password) params.set('pass', node.password);
+      if (node.alpn && node.alpn.length) params.set('alpn', node.alpn.join(','));
+      if (node.sni) params.set('sni', node.sni);
+      const query = params.toString();
+      const userPass = node.uuid && node.password
+        ? `${node.uuid}:${node.password}`
+        : node.uuid || node.password || '';
+      return `tuic://${userPass ? userPass + '@' : ''}${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
+    }
+    case 'anytls': {
+      const params = new URLSearchParams();
+      if (node.sni) params.set('sni', node.sni);
       if (node.alpn && node.alpn.length) params.set('alpn', node.alpn.join(','));
       const query = params.toString();
-      const uuidPart = encodeURIComponent(node.uuid || '');
-      return `tuic://${uuidPart}@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
+      return `anytls://${node.password || ''}@${node.server}:${node.port}${query ? '?' + query : ''}#${nameEncoded}`;
     }
     default:
       return node.raw || '';
