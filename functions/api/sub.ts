@@ -56,7 +56,7 @@ export async function onRequest(context: EventContext<unknown, never, Record<str
     return new Response(singBoxConfig, {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Content-Disposition': `attachment; filename="singbox-${platform || 'macos'}-latest.json"`,
+        'Content-Disposition': `attachment; filename="config.json"`,
       },
     });
   } catch (err: unknown) {
