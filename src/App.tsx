@@ -317,6 +317,9 @@ export default function App() {
   const [enableClashApi, setEnableClashApi] = useState<boolean>(true);
   const [clashApiPort, setClashApiPort] = useState<string>('0.0.0.0:9090');
   const [clashUiUrl, setClashUiUrl] = useState<string>('https://github.com/MetaCubeX/Yacd-meta/archive/gh-pages.zip');
+  const [enableSingboxApi, setEnableSingboxApi] = useState<boolean>(false);
+  const [singboxApiPort, setSingboxApiPort] = useState<string>('127.0.0.1:9091');
+  const [singboxApiSecret, setSingboxApiSecret] = useState<string>('');
   
   // Tun & Mixed (System Proxy) settings
   const [enableTun, setEnableTun] = useState<boolean>(true);
@@ -364,6 +367,9 @@ export default function App() {
       enableClashApi,
       clashApiPort,
       clashUiUrl,
+      enableSingboxApi,
+      singboxApiPort,
+      singboxApiSecret,
       cdnPrefix: resolvedCdnPrefix,
       enableTun,
       enableMixed,
@@ -373,7 +379,7 @@ export default function App() {
     setSingBoxConfig(generated);
     setEditableConfig(generated);
     setValidationMsg(null);
-  }, [rawInput, dnsStrategy, rulesets, platform, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, cdnType, customCdn, enableTun, enableMixed, mixedPort, customRules]);
+  }, [rawInput, dnsStrategy, rulesets, platform, groupByCountry, includeAutoGroup, enableClashApi, clashApiPort, clashUiUrl, enableSingboxApi, singboxApiPort, singboxApiSecret, cdnType, customCdn, enableTun, enableMixed, mixedPort, customRules]);
 
   // Handle auto-closing notifications
   useEffect(() => {
@@ -435,6 +441,11 @@ export default function App() {
       params.set('enableClashApi', String(enableClashApi));
       if (clashApiPort) params.set('clashApiPort', clashApiPort);
       if (clashUiUrl) params.set('clashUiUrl', clashUiUrl);
+      params.set('enableSingboxApi', String(enableSingboxApi));
+      if (enableSingboxApi) {
+        if (singboxApiPort) params.set('singboxApiPort', singboxApiPort);
+        if (singboxApiSecret) params.set('singboxApiSecret', singboxApiSecret);
+      }
       params.set('enableTun', String(enableTun));
       params.set('enableMixed', String(enableMixed));
       if (mixedPort) params.set('mixedPort', mixedPort);
@@ -1059,6 +1070,60 @@ export default function App() {
                   </div>
                 </div>
               )}
+
+              {/* Enable Sing-Box API Toggle (sing-box 1.14+) */}
+              <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-150 rounded-xl">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-slate-700">
+                    {lang === 'zh' ? '🧭 启用 Sing-Box API (1.14+)' : 'Enable Sing-Box API (1.14+)'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {lang === 'zh' ? '官方 gRPC 控制服务 + 内置 Dashboard' : 'Official gRPC control service + built-in dashboard'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEnableSingboxApi(!enableSingboxApi)}
+                  className={`relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    enableSingboxApi ? 'bg-indigo-600' : 'bg-slate-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      enableSingboxApi ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {enableSingboxApi && (
+                <div className="space-y-3.5 border-t border-slate-100 pt-3.5 mt-1.5 animate-fadeIn">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      {lang === 'zh' ? '监听地址' : 'Listen Address'}
+                    </label>
+                    <input
+                      type="text"
+                      value={singboxApiPort}
+                      onChange={(e) => setSingboxApiPort(e.target.value)}
+                      placeholder="127.0.0.1:9091"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                      {lang === 'zh' ? '访问密钥 (Secret)' : 'Secret'}
+                    </label>
+                    <input
+                      type="text"
+                      value={singboxApiSecret}
+                      onChange={(e) => setSingboxApiSecret(e.target.value)}
+                      placeholder={lang === 'zh' ? '监听 0.0.0.0 时必须设置' : 'Required when listening on 0.0.0.0'}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1097,6 +1162,9 @@ export default function App() {
                     enableClashApi,
                     clashApiPort,
                     clashUiUrl,
+                    enableSingboxApi,
+                    singboxApiPort,
+                    singboxApiSecret,
                     cdnPrefix: resolvedCdnPrefix,
                     enableTun,
                     enableMixed,

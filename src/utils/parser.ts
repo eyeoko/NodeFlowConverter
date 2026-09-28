@@ -673,6 +673,9 @@ export interface ConversionOptions {
   enableClashApi?: boolean;
   clashApiPort?: string;
   clashUiUrl?: string;
+  enableSingboxApi?: boolean;
+  singboxApiPort?: string;
+  singboxApiSecret?: string;
   cdnPrefix?: string;
   platform?: Platform;
   enableTun?: boolean;
@@ -848,14 +851,11 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     }
   }
 
-  // Standard direct and block outbounds
+  // Direct outbound resolves domains through the domestic DNS server
   outbounds.push({
     type: 'direct',
     tag: 'direct',
-  });
-  outbounds.push({
-    type: 'block',
-    tag: 'block',
+    domain_resolver: 'dns_direct',
   });
 
   // Append any country groups / test groups
@@ -1045,6 +1045,16 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   const dnsRules: any[] = [];
   const routeRuleSets: any[] = [];
 
+  // Node server domains must resolve via real DNS (not fakeip) so proxies can connect
+  const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s) && !s.includes(':')))];
+  const chinaRulesetEnabled = options.rulesets.includes('China-Services') || options.rulesets.includes('GeoIP:CN');
+
+  // HTTPS/SVCB answers bypass classic A/AAAA handling and must not leak or block fakeip
+  dnsRules.push({
+    query_type: ['HTTPS', 'SVCB'],
+    action: 'reject',
+  });
+
   if (options.dnsStrategy === 'fakeip') {
     dnsServers.push(
       {
@@ -1052,7 +1062,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'dns_proxy',
         server: '8.8.8.8',
         path: '/dns-query',
-        server_name: 'dns.google',
+        tls: { enabled: true, server_name: 'dns.google' },
       },
       {
         type: 'udp',
@@ -1063,10 +1073,10 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       {
         type: 'fakeip',
         tag: 'dns_fakeip',
+        inet4_range: '198.18.0.0/15',
+        inet6_range: 'fc00::/18',
       }
     );
-    // Node server domains must resolve via real DNS (not fakeip) so proxies can connect
-    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s) && !s.includes(':')))];
     if (nodeServers.length > 0) {
       dnsRules.push({
         domain: nodeServers,
@@ -1075,8 +1085,26 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     }
     dnsRules.push(
       {
+        clash_mode: 'Direct',
+        server: 'dns_direct',
+      },
+      {
+        clash_mode: 'Global',
+        server: 'dns_fakeip',
+      }
+    );
+    // Keep domestic domains on real addresses so direct outbound still works
+    if (chinaRulesetEnabled) {
+      dnsRules.push({
+        rule_set: 'geosite-cn',
+        server: 'dns_direct',
+      });
+    }
+    dnsRules.push(
+      {
         query_type: ['A', 'AAAA'],
         server: 'dns_fakeip',
+        rewrite_ttl: 1,
       }
     );
   } else {
@@ -1092,11 +1120,11 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'dns_proxy',
         server: '8.8.8.8',
         path: '/dns-query',
+        tls: { enabled: true, server_name: 'dns.google' },
       }
     );
 
     // Bootstrap: proxy server domains must resolve via direct DNS (prevents loopback)
-    const nodeServers = [...new Set(nodes.map(n => n.server).filter(s => s && !/^\d+\.\d+\.\d+\.\d+$/.test(s) && !s.includes(':')))];
     if (nodeServers.length > 0) {
       dnsRules.push({
         domain: nodeServers,
@@ -1104,7 +1132,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       });
     }
     // Chinese domains → domestic DNS
-    if (options.rulesets.includes('China-Services') || options.rulesets.includes('GeoIP:CN')) {
+    if (chinaRulesetEnabled) {
       dnsRules.push({
         rule_set: 'geosite-cn',
         server: 'dns_direct',
@@ -1131,10 +1159,13 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   const routingRules: any[] = [
     {
       action: 'sniff',
-      sniffer: ['http', 'tls', 'quic'],
+      sniffer: ['http', 'tls', 'quic', 'dns', 'stun'],
+      timeout: '100ms',
     },
     {
-      protocol: 'dns',
+      type: 'logical',
+      mode: 'or',
+      rules: [{ port: 53 }, { protocol: 'dns' }],
       action: 'hijack-dns',
     },
     {
@@ -1155,14 +1186,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   if (options.rulesets.includes('AD-Block')) {
     routingRules.push({
       rule_set: 'geosite-category-ads-all',
-      outbound: 'block',
+      action: 'reject',
     });
     routeRuleSets.push({
       type: 'remote',
       tag: 'geosite-category-ads-all',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-ads-all'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1178,14 +1209,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-openai',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-openai'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-anthropic',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-anthropic'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       }
     );
   }
@@ -1201,7 +1232,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-bilibili',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-bilibili'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1216,7 +1247,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-youtube',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-youtube'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1231,7 +1262,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-google',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-google'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1261,7 +1292,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-cn',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-cn'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       }
     );
   }
@@ -1284,14 +1315,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-telegram',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-telegram'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geoip-telegram',
         format: 'binary',
         url: getRulesetUrl('geoip', 'geoip-telegram'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       }
     );
   }
@@ -1307,7 +1338,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-github',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-github'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1322,7 +1353,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-microsoft',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-microsoft'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1337,7 +1368,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-apple',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-apple'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1354,21 +1385,21 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-twitter',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-twitter'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-facebook',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-facebook'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-instagram',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-instagram'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       }
     );
   }
@@ -1387,28 +1418,28 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-netflix',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-netflix'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geoip-netflix',
         format: 'binary',
         url: getRulesetUrl('geoip', 'geoip-netflix'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-disney',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-disney'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-hbo',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-hbo'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       }
     );
   }
@@ -1427,28 +1458,28 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-steam',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-steam'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-epic',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-epic'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-ea',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-ea'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-nintendo',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-nintendo'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       }
     );
   }
@@ -1464,7 +1495,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-scholar-education',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-scholar-education'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1479,7 +1510,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-finance',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-finance'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1495,14 +1526,14 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         tag: 'geosite-cloudflare',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-cloudflare'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       },
       {
         type: 'remote',
         tag: 'geosite-aws',
         format: 'binary',
         url: getRulesetUrl('geosite', 'geosite-aws'),
-        download_detour: 'direct',
+        http_client: 'rule-set-dl',
       }
     );
   }
@@ -1518,7 +1549,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-spotify',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-spotify'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1533,7 +1564,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-tiktok',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-tiktok'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1556,7 +1587,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-proxy',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-proxy'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1571,7 +1602,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-category-media',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-category-media'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
@@ -1594,26 +1625,46 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       tag: 'geosite-geolocation-!cn',
       format: 'binary',
       url: getRulesetUrl('geosite', 'geosite-geolocation-!cn'),
-      download_detour: 'direct',
+      http_client: 'rule-set-dl',
     });
   }
 
-  // 25. Custom user-defined rules
+  // 25. GeoIP CN fallback — mainland IPs that no domain rule matched go direct
+  // (mirrors the reference scheme: geosite-geolocation-!cn → proxy, geoip-cn → direct)
+  if (chinaRulesetEnabled) {
+    routingRules.push({
+      rule_set: 'geoip-cn',
+      outbound: 'direct',
+    });
+    routeRuleSets.push({
+      type: 'remote',
+      tag: 'geoip-cn',
+      format: 'binary',
+      url: getRulesetUrl('geoip', 'geoip-cn'),
+      http_client: 'rule-set-dl',
+    });
+  }
+
+  // 26. Custom user-defined rules
   if (options.customRules && options.customRules.length > 0) {
     for (const rule of options.customRules) {
+      // sing-box 1.11+ replaces the special "block" outbound with the reject rule action
+      const target = rule.outbound === 'block'
+        ? { action: 'reject' }
+        : { outbound: rule.outbound };
       if (rule.type === 'domain') {
-        routingRules.push({ domain: [rule.value], outbound: rule.outbound });
+        routingRules.push({ domain: [rule.value], ...target });
       } else if (rule.type === 'ip') {
-        routingRules.push({ ip_cidr: [rule.value], outbound: rule.outbound });
+        routingRules.push({ ip_cidr: [rule.value], ...target });
       } else if (rule.type === 'rule_set') {
         const tag = 'custom-' + rule.value.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-        routingRules.push({ rule_set: tag, outbound: rule.outbound });
+        routingRules.push({ rule_set: tag, ...target });
         routeRuleSets.push({
           type: 'remote',
           tag,
           format: 'binary',
           url: rule.value,
-          download_detour: 'direct',
+          http_client: 'rule-set-dl',
         });
       }
     }
@@ -1629,10 +1680,11 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       auto_route: true,
     };
 
+    // The TUN `stack` option is deprecated since sing-box 1.15.0 and removed from
+    // current schemas, so it is no longer emitted; sing-tun's own stack is used.
     switch (platform) {
       case 'macos':
         tunInbound.strict_route = true;
-        tunInbound.stack = 'mixed';
         tunInbound.dns_mode = 'native';
         tunInbound.platform = {
           http_proxy: {
@@ -1646,23 +1698,19 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
         break;
       case 'windows':
         tunInbound.strict_route = true;
-        tunInbound.stack = 'system';
         tunInbound.dns_mode = 'hijack';
         break;
       case 'linux':
         tunInbound.auto_redirect = true;
         tunInbound.strict_route = true;
-        tunInbound.stack = 'mixed';
         tunInbound.dns_mode = 'hijack';
         break;
       case 'android':
-        tunInbound.stack = 'mixed';
         tunInbound.dns_mode = 'native';
         break;
       case 'router':
         tunInbound.auto_redirect = true;
         tunInbound.strict_route = false;
-        tunInbound.stack = 'mixed';
         tunInbound.dns_mode = 'hijack';
         break;
     }
@@ -1699,12 +1747,12 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   finalConfig.dns = {
     servers: [...dnsServers],
     rules: [...dnsRules],
-    final: options.dnsStrategy === 'fakeip' ? 'dns_fakeip' : 'dns_direct',
+    final: options.dnsStrategy === 'fakeip' ? 'dns_proxy' : 'dns_direct',
     strategy: 'ipv4_only',
+    reverse_mapping: true,
+    optimistic: { enabled: true },
+    cache_capacity: 4096,
   };
-  if (options.dnsStrategy === 'fakeip') {
-    finalConfig.dns.fakeip = { enabled: true, inet4_range: '198.18.0.0/15' };
-  }
   if (baseConfig.dns) {
     // Append template servers that don't conflict with our tags
     const ourDnsTags = new Set(dnsServers.map((s: any) => s.tag));
@@ -1749,6 +1797,7 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     final: 'proxy',
     auto_detect_interface: true,
     default_domain_resolver: 'dns_direct',
+    default_http_client: 'rule-set-dl',
   };
   if (baseConfig.route) {
     if (baseConfig.route.auto_detect_interface !== undefined) {
@@ -1760,9 +1809,27 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
     if (baseConfig.route.default_domain_resolver) {
       finalConfig.route.default_domain_resolver = baseConfig.route.default_domain_resolver;
     }
+    if (baseConfig.route.default_http_client) {
+      finalConfig.route.default_http_client = baseConfig.route.default_http_client;
+    }
     // Template rules appended after ours (lower priority)
     for (const r of (baseConfig.route.rules || [])) {
       finalConfig.route.rules.push(r);
+    }
+  }
+
+  // ── http_clients ──
+  // sing-box 1.14 requires an explicit HTTP client for remote rule-sets:
+  // the legacy download_detour field and the implicit default client are deprecated.
+  finalConfig.http_clients = [{ tag: 'rule-set-dl', detour: 'direct' }];
+  const registerHttpClient = (tag: string, detour: string) => {
+    if (!finalConfig.http_clients.some((c: any) => c.tag === tag)) {
+      finalConfig.http_clients.push({ tag, detour });
+    }
+  };
+  if (baseConfig.http_clients) {
+    for (const c of baseConfig.http_clients) {
+      registerHttpClient(c.tag, c.detour ?? 'direct');
     }
   }
 
@@ -1771,9 +1838,16 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   if (baseConfig.route && baseConfig.route.rule_set) {
     const ourRuleSetTags = new Set(routeRuleSets.map((rs: any) => rs.tag));
     for (const rs of baseConfig.route.rule_set) {
-      if (!ourRuleSetTags.has(rs.tag)) {
-        finalConfig.route.rule_set.push(rs);
+      if (ourRuleSetTags.has(rs.tag)) continue;
+      const templateRuleSet = { ...rs };
+      if (templateRuleSet.download_detour) {
+        // Migrate legacy download_detour to an explicit HTTP client
+        const clientTag = `dl-${templateRuleSet.download_detour}`;
+        registerHttpClient(clientTag, templateRuleSet.download_detour);
+        templateRuleSet.http_client = clientTag;
+        delete templateRuleSet.download_detour;
       }
+      finalConfig.route.rule_set.push(templateRuleSet);
     }
   }
 
@@ -1781,9 +1855,13 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
   // Headless platforms (linux/android/router) get the web UI download with direct detour
   // so users can open the dashboard in a browser immediately.
   // macOS skips the UI download (SFM build lacks with_clash_api; GUI provides its own UI).
+  const cacheFile: any = { enabled: true, store_dns: true };
+  if (options.dnsStrategy === 'fakeip') {
+    cacheFile.store_fakeip = true;
+  }
   if (options.enableClashApi) {
     finalConfig.experimental = finalConfig.experimental || {};
-    finalConfig.experimental.cache_file = { enabled: true };
+    finalConfig.experimental.cache_file = cacheFile;
     finalConfig.experimental.clash_api = {
       external_controller: options.clashApiPort || '127.0.0.1:9090',
       default_mode: 'rule',
@@ -1793,19 +1871,58 @@ export function generateSingBoxConfig(nodes: ProxyNode[], options: ConversionOpt
       finalConfig.experimental.clash_api.external_ui_download_url = options.clashUiUrl;
       finalConfig.experimental.clash_api.external_ui_download_detour = 'direct';
     }
+  } else if (options.dnsStrategy === 'fakeip') {
+    // Persist fakeip addresses across restarts even without the Clash API
+    finalConfig.experimental = finalConfig.experimental || {};
+    finalConfig.experimental.cache_file = cacheFile;
   }
-  // Pass-through template services / experimental (cache_file, etc.)
-  if (baseConfig.services) {
-    finalConfig.services = [...baseConfig.services];
+  // ── services ──
+  // sing-box 1.14 introduces the gRPC API service with an embedded dashboard,
+  // which replaces the Clash API for clients that do not need Clash panels.
+  finalConfig.services = [...(baseConfig.services || [])];
+  if (options.enableSingboxApi && !finalConfig.services.some((s: any) => s.type === 'api')) {
+    const listenAddr = (options.singboxApiPort || '127.0.0.1:9091').trim();
+    const lastColon = listenAddr.lastIndexOf(':');
+    const listenHost = (lastColon > 0 ? listenAddr.slice(0, lastColon) : listenAddr).replace(/^\[|\]$/g, '');
+    const listenPort = parseInt(listenAddr.slice(lastColon + 1), 10);
+    const apiService: any = {
+      type: 'api',
+      listen: listenHost || '127.0.0.1',
+      listen_port: isNaN(listenPort) ? 9091 : listenPort,
+      dashboard: { enabled: true, path: 'dashboard' },
+    };
+    if (options.singboxApiSecret) {
+      apiService.secret = options.singboxApiSecret;
+    }
+    finalConfig.services.push(apiService);
+  }
+  if (finalConfig.services.length === 0) {
+    delete finalConfig.services;
   }
   if (baseConfig.experimental) {
     if (!finalConfig.experimental) {
       finalConfig.experimental = {};
     }
-    for (const key of Object.keys(baseConfig.experimental)) {
-      if (key !== 'clash_api') {
-        finalConfig.experimental[key] = baseConfig.experimental[key];
+    const templateExperimental: any = { ...baseConfig.experimental };
+    if (templateExperimental.cache_file) {
+      const templateCacheFile = { ...templateExperimental.cache_file };
+      // store_rdrc was replaced by store_dns in sing-box 1.14.0
+      if (templateCacheFile.store_rdrc !== undefined) {
+        if (templateCacheFile.store_dns === undefined) {
+          templateCacheFile.store_dns = templateCacheFile.store_rdrc;
+        }
+        delete templateCacheFile.store_rdrc;
       }
+      finalConfig.experimental.cache_file = {
+        ...(finalConfig.experimental.cache_file || {}),
+        ...templateCacheFile,
+      };
+    }
+    for (const key of Object.keys(templateExperimental)) {
+      if (key === 'clash_api' || key === 'cache_file') {
+        continue;
+      }
+      finalConfig.experimental[key] = templateExperimental[key];
     }
   }
 

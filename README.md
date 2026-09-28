@@ -9,13 +9,14 @@
 - **多协议解析** — 支持 VMess、VLESS、Shadowsocks、Trojan、Hysteria2、TUIC、AnyTLS 及 Clash YAML 格式的节点提取
 - **本地离线编译** — 纯客户端解析引擎，无需外部 API，节点数据不离开浏览器
 - **在线订阅导入** — 通过 Cloudflare Functions 代理拉取远程订阅 URL
-- **基础配置模板** — 支持 3 档预设（精简/标准/完整）+ URL 远程导入 + 自定义 JSON 编辑
+- **Sing-Box 1.14+ 输出** — 生成的配置通过官方 JSON Schema 校验，可直接用于 sing-box 1.14 及以上内核
 - **自定义分流规则** — 支持域名/IP-CIDR/Rule-Set URL 三种规则类型，可指定 Proxy/Direct/Block 出站
 - **24+ 预设规则集** — 广告拦截、AI 服务、流媒体、游戏等，支持 CDN 加速下载
 - **TUN 虚拟网卡** — 可选启用 TUN 模式接管全系统流量
 - **系统代理端口** — 可选启用 Mixed（HTTP/SOCKS）代理端口
 - **国家地区分组** — 自动识别节点所属国家/地区，生成分流选择组与自动测速组
 - **Clash API 兼容** — 可选启用 Clash 外部控制接口，支持 Yacd / Metacubexd 面板
+- **Sing-Box API** — 可选启用 1.14 新增的 gRPC 控制服务与内置 Dashboard
 - **实时订阅链接** — 将节点编译为可导入 Sing-Box 的在线订阅端点
 - **Sing-Box 生态速览** — 内置官方及社区分支内核与 Web 面板资源导航
 - **中英双语界面** — 支持简体中文与 English 切换
@@ -97,9 +98,9 @@ NodeFlowConverter/
 │   └── utils/
 │       └── parser.ts        # 节点解析引擎 + Sing-Box 配置生成器
 ├── presets/
-│   ├── minimal.json         # 基础配置预设 - 精简版
-│   ├── standard.json        # 基础配置预设 - 标准版
-│   └── full.json            # 基础配置预设 - 完整版
+│   ├── minimal.json         # 基础配置预设 - 精简版（当前 UI 未接入）
+│   ├── standard.json        # 基础配置预设 - 标准版（当前 UI 未接入）
+│   └── full.json            # 基础配置预设 - 完整版（当前 UI 未接入）
 ├── functions/
 │   └── api/
 │       ├── health.ts               # GET /api/health
@@ -129,18 +130,25 @@ NodeFlowConverter/
 - 支持协议：`vmess://`, `vless://`, `ss://`, `trojan://`, `hysteria2://`/`hy2://`, `tuic://`, `anytls://`
 - 自动检测并解码 Base64 编码的订阅内容
 - 支持 Clash YAML 格式（含单行 inline 和多行 proxies 段落）
-- 生成符合 Sing-Box v1.12+ 规范的 JSON 配置（DNS `address` → `type`+`server`，移除 `alter_id`）
+- 生成符合 Sing-Box **v1.14+** 规范的 JSON 配置（已通过官方 JSON Schema 校验）
 - 支持 `system` / `fakeip` 两种 DNS 策略
 - 内置 24+ 预设规则集，自动生成 `route.rule_set` 远程规则集引用
 - 自定义分流规则注入（域名/IP-CIDR/Rule-Set URL），可指定 Proxy/Direct/Block 出站
 
-### 基础配置模板
+### Sing-Box 1.14 适配
 
-支持三种使用模式：
+配置生成逻辑对齐 sing-box 1.14 变更与主流配置方案（参考 [七尺宇 sing-box 1.14 配置精讲](https://www.qichiyu.com/1111.html)）：
 
-- **预设模板** — 从 `presets/*.json` 加载内置模板（minimal / standard / full）
-- **远程导入** — 通过 URL 拉取自定义基础配置
-- **手动编辑** — 直接编辑 JSON 模板并实时验证
+- **规则集下载** — 远程 `rule_set` 使用 `http_client` + `route.default_http_client`（1.14 已弃用 `download_detour`，导入的旧模板会自动迁移）
+- **DNS** — 使用新版 DNS server 结构（`tls.server_name`），FakeIP 地址段写入 `type: fakeip` 服务器；移除 1.12 起废弃的 `dns.fakeip` 配置块
+- **DNS 逻辑** — 拒绝 `HTTPS`/`SVCB` 查询防止绕过 FakeIP，国内域名走国内 DNS、节点域名强制真实解析，开启 `optimistic`（1.14 新特性）、`cache_capacity`、`reverse_mapping`
+- **路由动作** — 广告拦截与 Block 自定义规则改用 `action: reject`（`block` 出站已在 1.13 移除）；DNS 劫持改为 `port 53 OR protocol dns` 逻辑规则；嗅探补全 `dns`/`stun` 协议与 `timeout`
+- **国内兜底** — `geosite-geolocation-!cn → 代理` 之后追加 `geoip-cn → 直连`，未命中域名规则的大陆 IP 直连返回
+- **TUN** — 移除 1.15 起弃用的 `stack` 字段，保留按平台的 `strict_route` / `auto_redirect` / `dns_mode`
+- **API** — 除 Clash API 外，可选启用 1.14 新增的 `services` gRPC API 与内置 Dashboard
+- **缓存** — `experimental.cache_file` 启用 `store_dns` / `store_fakeip`（`store_rdrc` 已迁移）
+
+> ⚠️ 生成的配置需要 **sing-box 1.14 及以上** 内核（`optimistic`、`http_client`、`services` 均为 1.14 新增字段）。
 
 ### 路由规则集
 
